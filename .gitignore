@@ -48,3 +48,8 @@ docs/source/using/images/minishift-architecture-template*
 docs/.bundle/
 docs/.sass-cache/
 docs/.java
+
+*.tar.gz
+
+*client-tool*
+
