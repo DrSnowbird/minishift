@@ -16,16 +16,62 @@ limitations under the License.
 
 package constants
 
+import (
+	"fmt"
+	"path/filepath"
+
+	"github.com/minishift/minishift/pkg/minikube/constants"
+)
+
 const (
-	B2dIsoAlias            = "b2d"
-	CentOsIsoAlias         = "centos"
-	MinikubeIsoAlias       = "minikube"
-	OpenshiftContainerName = "origin"
-	OpenshiftExec          = "/usr/bin/openshift"
-	DefaultProject         = "myproject"
-	DefaultUser            = "developer"
+	CentOsIsoAlias                 = "centos"
+	OpenshiftContainerName         = "origin"
+	OpenshiftApiContainerLabel     = "io.kubernetes.container.name=apiserver"
+	KubernetesApiContainerLabel    = "io.kubernetes.container.name=api"
+	OpenshiftOcExec                = "/usr/bin/oc"
+	DefaultProject                 = "myproject"
+	DefaultUser                    = "developer"
+	DefaultUserPassword            = "developer"
+	BinaryName                     = "minishift"
+	OcPathInsideVM                 = "/var/lib/minishift/bin"
+	BaseDirInsideInstance          = "/var/lib/minishift/base"
+	ImageNameForClusterUpImageFlag = "openshift/origin-${component}"
+	HypervDefaultVirtualSwitchId   = "c08cb7b8-9b3c-408e-8e30-5e16a3aeb444"
+	HypervDefaultVirtualSwitchName = "Default Switch"
+	DockerbridgeSubnetCmd          = `docker network inspect -f "{{range .IPAM.Config }}{{ .Subnet }}{{end}}" bridge`
+	MinishiftEnableExperimental    = "MINISHIFT_ENABLE_EXPERIMENTAL"
 )
 
 var (
-	ValidIsoAliases = []string{"b2d", "centos", "minikube"}
+	ValidIsoAliases = []string{CentOsIsoAlias}
+	ValidComponents = []string{"automation-service-broker", "service-catalog", "template-service-broker"}
 )
+
+// ProfileAuthorizedKeysPath returns the path of authorized_keys file in profile dir used for authentication purpose
+func ProfileAuthorizedKeysPath() string {
+	return filepath.Join(constants.Minipath, "certs", "authorized_keys")
+}
+
+// ProfilePrivateKeyPath returns the path of private key of VM present in profile dir which is used for authentication purpose
+func ProfilePrivateKeyPath() string {
+	return filepath.Join(constants.Minipath, "certs", "id_rsa")
+}
+
+func GetOpenshiftImageToFetchOC(openshiftVersion string) string {
+	return fmt.Sprintf("openshift/origin-control-plane:%s", openshiftVersion)
+}
+
+// GetInstanceStateConfigPath return the path of instance config json file
+func GetInstanceStateConfigPath() string {
+	return filepath.Join(constants.Minipath, "machines", constants.MachineName+"-state.json")
+}
+
+// GetInstanceStateConfigOldPath return the old path of instance config to make new binary backward compatible
+func GetInstanceStateConfigOldPath() string {
+	return filepath.Join(constants.Minipath, "machines", constants.MachineName+".json")
+}
+
+// GetInstanceConfigPath return the path of instance config json file
+func GetInstanceConfigPath() string {
+	return filepath.Join(constants.Minipath, "config", constants.MachineName+".json")
+}

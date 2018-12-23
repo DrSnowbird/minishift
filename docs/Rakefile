@@ -33,7 +33,7 @@ task :clean do
   rm_f ADOC_VARIABLES
   # find ditaa images based on the fact that they have a cache file
   DITAA_IMAGES = Rake::FileList.new do |list|
-    Rake::FileList.new("source/**/images/*.png.cache").each do |f|
+    Rake::FileList.new("source/**/images/*-template.png.cache").each do |f|
       list.add(f)
       list.add(f.gsub(/\.cache/, ''))
     end
@@ -80,6 +80,7 @@ task :serve, [:server_args] => [:init, :markdown_to_asciidoc, :adoc_variables] d
   if args[:server_args].nil? then
     sh "bundle exec middleman server"
   else
+    sh "cp -f source/using/images/minishift-architecture-template.png source/using/images/minishift-architecture.png"
     sh "bundle exec middleman server #{args[:server_args]}"
   end
 end
@@ -110,25 +111,31 @@ task :adoc_variables => :init do
   minishift_version    = ENV['MINISHIFT_VERSION']    || 'unset'
   openshift_version    = ENV['OPENSHIFT_VERSION']    || 'unset'
   centos_iso_version   = ENV['CENTOS_ISO_VERSION']   || 'unset'
-  minikube_iso_version = ENV['MINIKUBE_ISO_VERSION'] || 'unset'
 
-  ADOC_VARIABLES.each do |f|
-    File.open(f, "w+") do |f|
-      f.write(":project: Minishift\n")
-      f.write(":minishift-version: #{minishift_version}\n")
-      f.write(":openshift-version: #{openshift_version}\n")
-      f.write(":centos-iso-version: #{centos_iso_version}\n")
-      f.write(":minikube-iso-version: #{minikube_iso_version}\n")
-    end
-  end
+  contents = <<EOF
+:project: Minishift
+:download-url: https://github.com/minishift/minishift/releases
+:download-text: {project} Releases
+
+:minishift-version: #{minishift_version}
+:openshift-version: #{openshift_version}
+:centos-iso-version: #{centos_iso_version}
+EOF
+
+  ADOC_VARIABLES.each { |f| File.write(f, contents) }
 end
 
 desc 'Check links'
 task :link_check => :gen do
   # Limiting us here to check for 4xx errors which will cover broken links
   # Without this restriction we are getting errors for TLS certificate verification of
-  # docs.openshift.org. This can be prevented by custom installing missing certificates, but
+  # docs.okd.io. This can be prevented by custom installing missing certificates, but
   # for now that is not required (HF)
+
+  # Don't need minishift-architecture.html file as it is unnecessary
+  # TODO: Investigate asciidoctor-diagram gem to see how we can prevent it
+  sh "rm -f build/using/minishift-architecture.html"
+  sh "cp -f build/using/images/minishift-architecture-template.png build/using/images/minishift-architecture.png"
   sh "bundle exec htmlproofer build --only-4xx"
 end
 

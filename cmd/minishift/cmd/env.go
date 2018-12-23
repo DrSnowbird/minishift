@@ -22,11 +22,10 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"text/template"
 
 	"github.com/minishift/minishift/pkg/minikube/constants"
-
-	"strings"
 
 	"github.com/docker/machine/libmachine"
 	"github.com/minishift/minishift/cmd/minishift/cmd/util"
@@ -73,37 +72,20 @@ func getConfigSet(api libmachine.API, forceShell string, noProxy bool) (*DockerS
 		DockerCertPath:  envMap["DOCKER_CERT_PATH"],
 		DockerHost:      envMap["DOCKER_HOST"],
 		DockerTLSVerify: envMap["DOCKER_TLS_VERIFY"],
-		UsageHint:       shell.GenerateUsageHint(userShell, cmdLine),
 	}
 
 	if noProxy {
-		host, err := api.Load(constants.MachineName)
+		cmdLine = cmdLine + " --no-proxy"
+		noProxyVar, noProxyValue, err := util.GetNoProxyConfig(api)
 		if err != nil {
-			return nil, fmt.Errorf("Error getting IP: %s", err)
+			return nil, err
 		}
-
-		ip, err := host.Driver.GetIP()
-		if err != nil {
-			return nil, fmt.Errorf("Error getting host IP: %s", err)
-		}
-
-		noProxyVar, noProxyValue := shell.FindNoProxyFromEnv()
-
-		// add the docker host to the no_proxy list idempotently
-		switch {
-		case noProxyValue == "":
-			noProxyValue = ip
-		case strings.Contains(noProxyValue, ip):
-		//ip already in no_proxy list, nothing to do
-		default:
-			noProxyValue = fmt.Sprintf("%s,%s", noProxyValue, ip)
-		}
-
 		shellCfg.NoProxyVar = noProxyVar
 		shellCfg.NoProxyValue = noProxyValue
 	}
 
-	shellCfg.Prefix, shellCfg.Suffix, shellCfg.Delimiter = shell.GetPrefixSuffixDelimiterForSet(userShell, false)
+	shellCfg.UsageHint = shell.GenerateUsageHint(userShell, cmdLine)
+	shellCfg.Prefix, shellCfg.Delimiter, shellCfg.Suffix, _ = shell.GetPrefixSuffixDelimiterForSet(userShell)
 
 	return shellCfg, nil
 }
@@ -114,19 +96,16 @@ func getConfigUnset(forceShell string, noProxy bool) (*DockerShellConfig, error)
 		return nil, err
 	}
 
-	cmdLine := "minishift docker-env"
-	shellCfg := &DockerShellConfig{
-		UsageHint: shell.GenerateUsageHint(userShell, cmdLine),
-	}
+	cmdLine := "minishift docker-env --unset"
+	shellCfg := &DockerShellConfig{}
 
 	if noProxy {
 		shellCfg.NoProxyVar, shellCfg.NoProxyValue = shell.FindNoProxyFromEnv()
+		cmdLine = cmdLine + " --no-proxy"
 	}
 
-	prefix, suffix, delimiter := shell.GetPrefixSuffixDelimiterForUnSet(userShell)
-	shellCfg.Prefix = prefix
-	shellCfg.Suffix = suffix
-	shellCfg.Delimiter = delimiter
+	shellCfg.UsageHint = shell.GenerateUsageHint(userShell, cmdLine)
+	shellCfg.Prefix, shellCfg.Suffix, shellCfg.Delimiter = shell.GetPrefixSuffixDelimiterForUnSet(userShell)
 
 	return shellCfg, nil
 }
@@ -174,7 +153,11 @@ var dockerEnvCmd = &cobra.Command{
 
 func init() {
 	RootCmd.AddCommand(dockerEnvCmd)
-	dockerEnvCmd.Flags().BoolVar(&noProxy, "no-proxy", false, "Add the virtual machine IP to the NO_PROXY environment variable.")
+	if runtime.GOOS == "windows" {
+		dockerEnvCmd.Flags().BoolVar(&noProxy, "no-proxy", false, "Add the virtual machine IP to the NO_PROXY environment variable.")
+	} else {
+		dockerEnvCmd.Flags().BoolVar(&noProxy, "no-proxy", false, "Add the virtual machine IP to the no_proxy/NO_PROXY environment variable.")
+	}
 	dockerEnvCmd.Flags().StringVar(&forceShell, "shell", "", "Force setting the environment for a specified shell: [fish, cmd, powershell, tcsh, bash, zsh]. Default is auto-detect.")
 	dockerEnvCmd.Flags().BoolVarP(&unset, "unset", "u", false, "Clear the environment variable values instead of setting them.")
 }

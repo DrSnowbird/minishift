@@ -18,6 +18,7 @@ package addon
 
 import (
 	"os"
+	"text/tabwriter"
 	"text/template"
 
 	"fmt"
@@ -33,22 +34,23 @@ import (
 
 var verbose bool
 
-var defaultAddonListFormat = "- {{.Name | printf \"%-15s\"}}: {{.Status | printf \"%-10s\"}} P({{.Priority | printf \"%d\"}})\n"
-var defaultListTemplate *template.Template
-
-var verboseAddonListFormat = `Name       : {{.Name}}
-Description: {{.Description}}
-Enabled    : {{.Status}}
-Priority   : {{.Priority}}
+var verboseAddonListFormat = `Name              : {{.Name}}
+Description       : {{.Description}}
+Url               : {{.Url}}
+Openshift Version : {{.RequiredOpenshiftVerison}}
+Enabled           : {{.Status}}
+Priority          : {{.Priority}}
 
 `
 var verboseListTemplate *template.Template
 
 type DisplayAddOn struct {
-	Name        string
-	Description string
-	Status      string
-	Priority    int
+	Name                     string
+	Description              string
+	Status                   string
+	Priority                 int
+	Url                      string
+	RequiredOpenshiftVerison string
 }
 
 var addonsListCmd = &cobra.Command{
@@ -61,46 +63,49 @@ var addonsListCmd = &cobra.Command{
 func init() {
 	addonsListCmd.Flags().BoolVar(&verbose, "verbose", false, "Prints the add-on list with a more verbose format of the output that includes the add-on description.")
 	AddonsCmd.AddCommand(addonsListCmd)
-
-	var err error
-	defaultListTemplate, err = template.New("list").Parse(defaultAddonListFormat)
-	if err != nil {
-		atexit.ExitWithMessage(1, fmt.Sprintf("Error creating the list template: %s", err.Error()))
-	}
-
-	verboseListTemplate, err = template.New("list").Parse(verboseAddonListFormat)
-	if err != nil {
-		atexit.ExitWithMessage(1, fmt.Sprintf("Error creating the list template: %s", err.Error()))
-	}
 }
 
 func runListCommand(cmd *cobra.Command, args []string) {
 	addOnManager := GetAddOnManager()
-
-	template := defaultListTemplate
-	if verbose {
-		template = verboseListTemplate
+	verboseListTemplate, err := template.New("list").Parse(verboseAddonListFormat)
+	if err != nil {
+		atexit.ExitWithMessage(1, fmt.Sprintf("Error creating the list template: %s", err.Error()))
 	}
-
-	printAddOnList(addOnManager, os.Stdout, template)
+	printAddOnList(addOnManager, os.Stdout, verboseListTemplate)
 }
 
 func printAddOnList(manager *manager.AddOnManager, writer io.Writer, template *template.Template) {
 	addOns := manager.List()
 	sort.Sort(addon.ByStatusThenPriorityThenName(addOns))
+	display := new(tabwriter.Writer)
+	display.Init(os.Stdout, 0, 8, 0, '\t', 0)
+
 	for _, addon := range addOns {
 		description := strings.Join(addon.MetaData().Description(), fmt.Sprintf("\n%13s", " "))
-		addonTemplate := DisplayAddOn{addon.MetaData().Name(), description, stringFromStatus(addon.IsEnabled()), addon.GetPriority()}
-		err := template.Execute(writer, addonTemplate)
-		if err != nil {
-			atexit.ExitWithMessage(1, fmt.Sprintf("Error executing the template: %s", err.Error()))
+		addonInfo := DisplayAddOn{addon.MetaData().Name(), description,
+			stringFromStatus(addon.IsEnabled()), addon.GetPriority(),
+			addon.MetaData().Url(), addon.MetaData().OpenShiftVersion()}
+		if verbose {
+			err := template.Execute(writer, addonInfo)
+			if err != nil {
+				atexit.ExitWithMessage(1, fmt.Sprintf("Error executing the template: %s", err.Error()))
+			}
+		} else {
+			fmt.Fprintln(display, fmt.Sprintf("- %s\t : %s\tP(%v)", addonInfo.Name, addonInfo.Status, addonInfo.Priority))
 		}
 	}
+	display.Flush()
 }
 
 func stringFromStatus(addonStatus bool) string {
 	if addonStatus {
+		if verbose {
+			return "true"
+		}
 		return "enabled"
+	}
+	if verbose {
+		return "false"
 	}
 	return "disabled"
 }

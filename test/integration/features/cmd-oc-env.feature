@@ -1,4 +1,4 @@
-@cmd-oc-env @command
+@cmd-oc-env @core
 Feature: Command oc-env
 Command oc-env sets the path to oc binary.
 INFO: This feature runs against a shell instance. To use a non-default shell, please select
@@ -7,17 +7,17 @@ one from: bash, cmd, powershell, tcsh, zsh with TEST_WITH_SPECIFIED_SHELL parame
   Scenario: User starts shell instance without oc in PATH
   INFO: This scenario starts interactive shell instance, which will be closed in the end of this feature.
     Given user starts shell instance on host machine
-     When executing "unset PATH" in host shell
      Then executing "oc status" in host shell fails
 
   Scenario: Starting minishift
     Given Minishift has state "Does Not Exist"
+      And image caching is disabled
      When executing "minishift start" succeeds
      Then Minishift has state "Running"
 
   Scenario: Setting oc binary to PATH with oc-env command
      When executing "minishift oc-env" in host shell succeeds
-      And evaluating stdout of the previous command in host shell
+      And evaluating stdout of the previous command in host shell succeeds
      Then executing "oc status" in host shell succeeds
       And stdout of host shell contains "In project My Project (myproject)"
 

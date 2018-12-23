@@ -20,7 +20,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"strings"
 	"text/template"
 
 	"github.com/docker/machine/libmachine/auth"
@@ -75,11 +74,10 @@ func (provisioner *MinishiftProvisioner) SetHostname(hostname string) error {
 
 func (provisioner *MinishiftProvisioner) GetRedhatRelease() bool {
 	// Add ISO (RHEL, CentOS, ...etc.) type detail to config
-	minishiftConfig.InstanceConfig.IsRHELBased = true
-	minishiftConfig.InstanceConfig.Write()
+	minishiftConfig.InstanceStateConfig.IsRHELBased = true
+	minishiftConfig.InstanceStateConfig.Write()
 
-	OsRelease, _ := provisioner.GetOsReleaseInfo()
-	if strings.Contains(OsRelease.Name, "Red Hat Enterprise") {
+	if provisioner.OsReleaseInfo.ID == "rhel" {
 		return true
 	}
 	return false
@@ -92,6 +90,13 @@ func (provisioner *MinishiftProvisioner) Package(name string, action pkgaction.P
 
 func (provisioner *MinishiftProvisioner) dockerDaemonResponding() bool {
 	log.Debug("checking docker daemon")
+
+	// Start the docker daemon service if not running.
+	if out, err := provisioner.SSHCommand("sudo systemctl -f start docker"); err != nil {
+		log.Warnf("Error getting SSH command to check if the daemon is running: %s", err)
+		log.Debugf("'sudo systemctl docker start' output:\n%s", out)
+		return false
+	}
 
 	if out, err := provisioner.SSHCommand("sudo docker version"); err != nil {
 		log.Warnf("Error getting SSH command to check if the daemon is running: %s", err)
@@ -110,7 +115,7 @@ func (provisioner *MinishiftProvisioner) Provision(swarmOptions swarm.Options, a
 	swarmOptions.Env = engineOptions.Env
 
 	// set default storage driver for minishift
-	storageDriver, err := decideStorageDriver(provisioner, "devicemapper", engineOptions.StorageDriver)
+	storageDriver, err := decideStorageDriver(provisioner, "overlay2", engineOptions.StorageDriver)
 	if err != nil {
 		return err
 	}
@@ -138,6 +143,14 @@ func (provisioner *MinishiftProvisioner) Provision(swarmOptions swarm.Options, a
 		return err
 	}
 
+	log.Info("\n   Feature detection ... ")
+	if err := doFeatureDetection(provisioner); err != nil {
+		log.Info("FAIL")
+		return err
+	} else {
+		log.Info("OK")
+	}
+
 	return nil
 }
 
@@ -155,6 +168,8 @@ func (provisioner *MinishiftProvisioner) GenerateDockerOptions(dockerPort int) (
 	engineConfigTemplate := engineConfigTemplateCentOS
 	if provisioner.GetRedhatRelease() {
 		engineConfigTemplate = engineConfigTemplateRHEL
+	} else if provisioner.OsReleaseInfo.ID == "fedora" {
+		engineConfigTemplate = engineConfigTemplateFedora
 	}
 
 	t, err := template.New("engineConfig").Parse(engineConfigTemplate)

@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/minishift/minishift/cmd/testing/cli"
+	"github.com/stretchr/testify/assert"
 )
 
 type templateExpectedOutputTest struct {
@@ -29,11 +30,11 @@ type templateExpectedOutputTest struct {
 
 var (
 	configTest = map[string]interface{}{
-		"iso-url":   "http://foo.bar/minishift-centos.iso",
-		"vm-driver": "kvm",
-		"cpus":      4,
-		"disk-size": "20g",
-		"v":         5,
+		"iso-url":                   "http://foo.bar/minishift-centos.iso",
+		"vm-driver":                 "kvm",
+		"cpus":                      4,
+		"disk-size":                 "20g",
+		"v":                         5,
 		"show-libmachine-logs":      true,
 		"log_dir":                   "/etc/hosts",
 		"ReminderWaitPeriodInHours": 99,
@@ -73,8 +74,6 @@ func TestConfigView(t *testing.T) {
 
 		template := determineTemplate(tt.template)
 		configView(configTest, template, tee.StdoutBuffer)
-		if tee.StdoutBuffer.String() != tt.expectedString {
-			t.Fatalf("Expected '%s'. Got '%s'.", tt.expectedString, tee.StdoutBuffer.String())
-		}
+		assert.Equal(t, tt.expectedString, tee.StdoutBuffer.String())
 	}
 }

@@ -18,6 +18,7 @@ package update
 
 import (
 	"bytes"
+	"context"
 	"crypto"
 	"encoding/hex"
 	"errors"
@@ -36,6 +37,8 @@ import (
 	"github.com/minishift/minishift/pkg/util/archive"
 	pb "gopkg.in/cheggaaa/pb.v1"
 
+	"github.com/kardianos/osext"
+	"github.com/minishift/minishift/pkg/util"
 	githubutils "github.com/minishift/minishift/pkg/util/github"
 	"github.com/minishift/minishift/pkg/version"
 )
@@ -77,6 +80,11 @@ func IsNewerVersion(localVersion, latestVersion semver.Version) bool {
 // It returns an error if any of these functions fails at any point.
 func Update(latestVersion semver.Version) error {
 	var extName string
+
+	path, _ := osext.Executable()
+	if writable := util.IsDirectoryWritable(filepath.Dir(path)); !writable {
+		return fmt.Errorf("Directory '%s' doesn't have write permission.\nPlease fix the permission issue and try running the command again.", filepath.Dir(path))
+	}
 
 	// Temporary directory to store archive contents
 	tmpDir, err := ioutil.TempDir("", "download")
@@ -125,7 +133,8 @@ func getLatestVersionFromGitHub(githubOwner, githubRepo string) (semver.Version,
 	)
 
 	client := githubutils.Client()
-	release, resp, err = client.Repositories.GetLatestRelease(githubOwner, githubRepo)
+	ctx := context.Background()
+	release, resp, err = client.Repositories.GetLatestRelease(ctx, githubOwner, githubRepo)
 	if err != nil {
 		return semver.Version{}, err
 	}
@@ -149,7 +158,7 @@ func downloadAndVerifyArchive(url, tmpDir string) (string, error) {
 
 	httpResp, err := http.Get(url)
 	if err != nil {
-		return "", errors.New(fmt.Sprintf("Cannot download archive from %s: %s", url, err))
+		return "", errors.New(fmt.Sprintf("Cannot download archive from '%s': %s", url, err))
 	}
 	defer func() { _ = httpResp.Body.Close() }()
 

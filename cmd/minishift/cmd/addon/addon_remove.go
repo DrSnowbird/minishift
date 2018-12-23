@@ -21,6 +21,7 @@ import (
 
 	"github.com/docker/machine/libmachine"
 	"github.com/docker/machine/libmachine/provision"
+	configCmd "github.com/minishift/minishift/cmd/minishift/cmd/config"
 	"github.com/minishift/minishift/cmd/minishift/cmd/util"
 	"github.com/minishift/minishift/cmd/minishift/state"
 	"github.com/minishift/minishift/pkg/minikube/constants"
@@ -57,7 +58,7 @@ func runRemoveAddon(cmd *cobra.Command, args []string) {
 		if addOnManager.Get(addonName) == nil {
 			atexit.ExitWithMessage(0, fmt.Sprintf(noAddOnMessage, addonName))
 		}
-		if addOnManager.Get(addonName).RemoveCommands() == nil {
+		if addOnManager.Get(addonName).MetaDataForAddonRemove() == nil {
 			atexit.ExitWithMessage(0, fmt.Sprintf(noRemoveAddOnMessage, addonName, addonName))
 		}
 	}
@@ -81,7 +82,8 @@ func runRemoveAddon(cmd *cobra.Command, args []string) {
 
 	routingSuffix := determineRoutingSuffix(host.Driver)
 	sshCommander := provision.GenericSSHCommander{Driver: host.Driver}
-	ocRunner, err := oc.NewOcRunner(minishiftConfig.InstanceConfig.OcPath, constants.KubeConfigPath)
+	sshUser := sshCommander.Driver.GetSSHUsername()
+	ocRunner, err := oc.NewOcRunner(minishiftConfig.InstanceStateConfig.OcPath, constants.KubeConfigPath)
 	if err != nil {
 		atexit.ExitWithMessage(1, fmt.Sprintf("Error removing the add-on: %s", err.Error()))
 	}
@@ -89,7 +91,7 @@ func runRemoveAddon(cmd *cobra.Command, args []string) {
 	for i := range args {
 		addonName := args[i]
 		addon := addOnManager.Get(addonName)
-		addonContext, err := clusterup.GetExecutionContext(ip, routingSuffix, viper.GetStringSlice(util.AddOnEnv), ocRunner, sshCommander)
+		addonContext, err := clusterup.GetExecutionContext(ip, routingSuffix, sshUser, viper.GetStringSlice(configCmd.AddonEnv.Name), ocRunner, sshCommander)
 		if err != nil {
 			atexit.ExitWithMessage(1, fmt.Sprint("Error removing the add-on: ", err))
 		}

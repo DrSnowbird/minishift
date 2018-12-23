@@ -17,7 +17,7 @@ single-node OpenShift cluster on your local host. Either for evaluation
 purposes or for ongoing development.
 
 Due to the fact that Minishift builds on OpenShift
-https://github.com/openshift/origin/blob/master/docs/cluster_up_down.md[cluster up],
+https://github.com/openshift/origin/blob/release-3.11/docs/cluster_up_down.md[cluster up],
 Minishift's focus lies on providing more value to the basic
 _cluster up_ provisioning. This includes virtual machine creation and
 management, making it easier to configure OpenShift in precisely the way
@@ -89,7 +89,7 @@ version name of a given release.
 [[minishift-190]]
 === Minishift 1.9.0
 - [x] Provide notation for default value for addon-envs https://github.com/minishift/minishift/issues/1135[#1135]
-- [ ] Ability to use you own certificates for the cluster https://github.com/minishift/minishift/issues/391[#391]
+- [ ] Ability to use your own certificates for the cluster https://github.com/minishift/minishift/issues/391[#391]
 - [ ] Global cache which can be shared among profiles https://github.com/minishift/minishift/issues/1408[#1408]
 
 [[minishift-1100]]

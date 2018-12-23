@@ -41,7 +41,7 @@ type ImageCacheConfig struct {
 // GetOpenShiftImageNames returns the full images names for the images requires for a fully functioning OpenShift instance
 func GetOpenShiftImageNames(version string) []string {
 	return []string{
-		fmt.Sprintf("openshift/origin:%s", version),
+		fmt.Sprintf("openshift/origin-control-plane:%s", version),
 		fmt.Sprintf("openshift/origin-docker-registry:%s", version),
 		fmt.Sprintf("openshift/origin-haproxy-router:%s", version),
 	}

@@ -32,18 +32,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 
-	"github.com/docker/machine/drivers/hyperv"
-	"github.com/docker/machine/drivers/virtualbox"
 	"github.com/docker/machine/libmachine"
-	"github.com/docker/machine/libmachine/drivers"
 	"github.com/docker/machine/libmachine/engine"
 	"github.com/docker/machine/libmachine/host"
 	"github.com/docker/machine/libmachine/state"
 	"github.com/golang/glog"
 	"github.com/minishift/minishift/pkg/minikube/constants"
+	minishiftNetwork "github.com/minishift/minishift/pkg/minishift/network"
 	minishiftUtil "github.com/minishift/minishift/pkg/minishift/util"
 	"github.com/minishift/minishift/pkg/util"
-	minishiftOs "github.com/minishift/minishift/pkg/util/os"
 	"github.com/minishift/minishift/pkg/util/os/atexit"
 	"github.com/pkg/errors"
 	pb "gopkg.in/cheggaaa/pb.v1"
@@ -52,6 +49,7 @@ import (
 var (
 	logsCmd             = "docker logs origin"
 	logsCmdFollow       = logsCmd + " -f"
+	logsCmdTail         = logsCmd + " --tail"
 	dockerAPIVersionCmd = "docker version --format '{{.Server.APIVersion}}'"
 )
 
@@ -96,6 +94,9 @@ func StartHost(api libmachine.API, config MachineConfig) (*host.Host, error) {
 		}
 		if err := api.Save(h); err != nil {
 			return nil, fmt.Errorf("Error saving started host: %s", err)
+		}
+		if err := setProxyToShell(config, h); err != nil {
+			return nil, err
 		}
 	}
 
@@ -161,18 +162,23 @@ type sshAble interface {
 
 // MachineConfig contains the parameters used to start a cluster.
 type MachineConfig struct {
-	MinikubeISO      string
-	ISOCacheDir      string
-	Memory           int
-	CPUs             int
-	DiskSize         int
-	VMDriver         string
-	DockerEnv        []string // Each entry is formatted as KEY=VALUE.
-	DockerEngineOpt  []string
-	InsecureRegistry []string
-	RegistryMirror   []string
-	HostOnlyCIDR     string // Only used by the virtualbox driver
-	ShellProxyEnv    string // Only used for proxy purpose
+	MinikubeISO           string
+	ISOCacheDir           string
+	Memory                int
+	CPUs                  int
+	DiskSize              int
+	VMDriver              string
+	DockerEnv             []string // Each entry is formatted as KEY=VALUE.
+	DockerEngineOpt       []string
+	InsecureRegistry      []string
+	RegistryMirror        []string
+	HostOnlyCIDR          string           // Only used by the virtualbox driver
+	ShellProxyEnv         util.ProxyConfig // Only used for proxy purpose
+	HypervVirtualSwitch   string
+	RemoteIPAddress       string // Only used for generic driver purpose to connect remote machine
+	RemoteSSHUser         string // Only used for generic driver purpose to specify ssh user
+	SSHKeyToConnectRemote string // Only used for generic driver purpose to specify ssh key path
+	UsingLocalProxy       bool
 }
 
 func engineOptions(config MachineConfig) *engine.Options {
@@ -183,17 +189,6 @@ func engineOptions(config MachineConfig) *engine.Options {
 		RegistryMirror:   config.RegistryMirror,
 	}
 	return &o
-}
-
-func createDriverOptions(driver drivers.Driver, explicitOptions map[string]interface{}) (drivers.DriverOptions, error) {
-	supportedFlags := driver.GetCreateFlags()
-
-	checkFlags, err := prepareDriverOptions(supportedFlags, explicitOptions)
-	if err != nil {
-		return nil, err
-	}
-
-	return checkFlags, nil
 }
 
 // CacheMinikubeISOFromURL download minishift ISO from a given URI.
@@ -332,21 +327,9 @@ func (m *MachineConfig) IsMinikubeISOCached() bool {
 }
 
 func createHost(api libmachine.API, config MachineConfig) (*host.Host, error) {
-	if config.ShouldCacheMinikubeISO() {
-		if err := config.CacheMinikubeISOFromURL(); err != nil {
-			return nil, err
-		}
-	}
+	driverOptions := getDriverOptions(config)
 
-	driverOptions, err := getDriverOptions(config)
-	if err != nil {
-		return nil, err
-	}
-
-	rawDriver, err := json.Marshal(&drivers.BaseDriver{
-		MachineName: constants.MachineName,
-		StorePath:   constants.Minipath,
-	})
+	rawDriver, err := json.Marshal(driverOptions)
 	if err != nil {
 		return nil, fmt.Errorf("Error attempting to marshal bare driver data: %s", err)
 	}
@@ -355,8 +338,6 @@ func createHost(api libmachine.API, config MachineConfig) (*host.Host, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Error creating new host: %s", err)
 	}
-
-	h.Driver.SetConfigFromFlags(driverOptions)
 
 	h.HostOptions.AuthOptions.CertDir = constants.Minipath
 	h.HostOptions.AuthOptions.StorePath = constants.Minipath
@@ -372,110 +353,35 @@ func createHost(api libmachine.API, config MachineConfig) (*host.Host, error) {
 		return nil, fmt.Errorf("Error attempting to save store: %s", err)
 	}
 
-	if config.ShellProxyEnv != "" {
-		fmt.Print("-- Setting proxy information ... ")
-		if err := minishiftUtil.SetProxyToShellEnv(h, config.ShellProxyEnv); err != nil {
-			fmt.Println("FAIL")
-			return nil, fmt.Errorf("Error setting proxy to VM: %s", err)
-		}
-		fmt.Println("OK")
+	if err = setProxyToShell(config, h); err != nil {
+		return nil, err
 	}
 
 	return h, nil
 }
 
-func getDriverOptions(config MachineConfig) (drivers.DriverOptions, error) {
+func getDriverOptions(config MachineConfig) interface{} {
+	var driver interface{}
 	switch config.VMDriver {
 	case "virtualbox":
-		d := virtualbox.NewDriver(constants.MachineName, constants.Minipath)
-		machineConfigOptions := map[string]interface{}{
-			"virtualbox-boot2docker-url": config.GetISOFileURI(),
-			"virtualbox-memory":          config.Memory,
-			"virtualbox-cpu-count":       config.CPUs,
-			"virtualbox-disk-size":       config.DiskSize,
-			"virtualbox-hostonly-cidr":   config.HostOnlyCIDR,
-		}
-
-		return createDriverOptions(d, machineConfigOptions)
+		driver = createVirtualboxHost(config)
 	case "vmwarefusion":
 		fmt.Println("VMWare Fusion driver will be deprecated soon. Please consider using other drivers.")
-		if minishiftOs.CurrentOS() != minishiftOs.DARWIN {
-			atexit.ExitWithMessage(1, "vmwarefusion driver is only supported on macOS hosts.")
-		}
-
-		api := libmachine.NewClient(constants.MachineName, constants.Minipath)
-		h, err := api.NewHost("vmwarefusion", []byte("{}"))
-		if err != nil {
-			return nil, err
-		}
-
-		machineConfigOptions := map[string]interface{}{
-			"vmwarefusion-boot2docker-url": config.GetISOFileURI(),
-			"vmwarefusion-memory-size":     config.Memory,
-			"vmwarefusion-cpu-count":       config.CPUs,
-		}
-
-		return createDriverOptions(h.Driver, machineConfigOptions)
-	case "xhyve":
-		if minishiftOs.CurrentOS() != minishiftOs.DARWIN {
-			atexit.ExitWithMessage(1, "xhyve driver is only supported on macOS hosts.")
-		}
-
-		api := libmachine.NewClient(constants.MachineName, constants.Minipath)
-		h, err := api.NewHost("xhyve", []byte("{}"))
-		if err != nil {
-			return nil, err
-		}
-
-		machineConfigOptions := map[string]interface{}{
-			"xhyve-boot2docker-url": config.GetISOFileURI(),
-			"xhyve-memory-size":     config.Memory,
-			"xhyve-cpu-count":       config.CPUs,
-			"xhyve-disk-size":       config.DiskSize,
-			"xhyve-virtio-9p":       "true",
-		}
-
-		return createDriverOptions(h.Driver, machineConfigOptions)
+		driver = createVMwareFusionHost(config)
 	case "kvm":
-		if minishiftOs.CurrentOS() != minishiftOs.LINUX {
-			atexit.ExitWithMessage(1, "kvm driver is only supported on GNU/Linux hosts.")
-		}
-
-		api := libmachine.NewClient(constants.MachineName, constants.Minipath)
-		h, err := api.NewHost("kvm", []byte("{}"))
-		if err != nil {
-			return nil, err
-		}
-
-		machineConfigOptions := map[string]interface{}{
-			"kvm-boot2docker-url": config.GetISOFileURI(),
-			"kvm-memory":          config.Memory,
-			"kvm-cpu-count":       config.CPUs,
-			"kvm-disk-size":       config.DiskSize,
-			"kvm-network":         "default",
-			"kvm-cache-mode":      "default",
-			"kvm-io-mode":         "threads",
-		}
-
-		return createDriverOptions(h.Driver, machineConfigOptions)
+		driver = createKVMHost(config)
+	case "xhyve":
+		driver = createXhyveHost(config)
 	case "hyperv":
-		if minishiftOs.CurrentOS() != minishiftOs.WINDOWS {
-			atexit.ExitWithMessage(1, "hyperv driver is only supported on Windows hosts.")
-		}
-
-		d := hyperv.NewDriver(constants.MachineName, constants.Minipath)
-		machineConfigOptions := map[string]interface{}{
-			"hyperv-boot2docker-url": config.GetISOFileURI(),
-			"hyperv-memory":          config.Memory,
-			"hyperv-cpu-count":       config.CPUs,
-			"hyperv-disk-size":       config.DiskSize,
-		}
-
-		return createDriverOptions(d, machineConfigOptions)
+		driver = createHypervHost(config)
+	case "hyperkit":
+		driver = createHyperkitHost(config)
+	case "generic":
+		driver = createGenericDriverConfig(config)
 	default:
 		atexit.ExitWithMessage(1, fmt.Sprintf("Unsupported driver: %s", config.VMDriver))
 	}
-	return nil, nil
+	return driver
 }
 
 // GetHostDockerEnv gets the necessary docker env variables to allow the use of docker through minikube's vm
@@ -508,19 +414,25 @@ func GetHostDockerEnv(api libmachine.API) (map[string]string, error) {
 
 // GetHostLogs gets the openshift logs of the host VM.
 // If follow is specified, it will tail the logs
-func GetHostLogs(api libmachine.API, follow bool) (string, error) {
+func GetHostLogs(api libmachine.API, follow bool, tail int64) (string, error) {
 	host, err := CheckIfApiExistsAndLoad(api)
 	if err != nil {
 		return "", err
 	}
 
-	if follow {
+	if follow || tail != -1 {
 		c, err := host.CreateSSHClient()
 		if err != nil {
 			return "", err
 		}
 
-		err = c.Shell(logsCmdFollow)
+		if follow && tail == -1 {
+			err = c.Shell(logsCmdFollow)
+		} else if !follow && tail != -1 {
+			err = c.Shell(fmt.Sprintf("%s %d", logsCmdTail, tail))
+		} else {
+			err = c.Shell(fmt.Sprintf("%s %d -f", logsCmdTail, tail))
+		}
 		if err != nil {
 			return "", errors.Wrap(err, "Error creating ssh client")
 		}
@@ -590,8 +502,7 @@ func GetConsoleURL(api libmachine.API) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
-	return fmt.Sprintf("https://%s:%d", ip, constants.APIServerPort), nil
+	return fmt.Sprintf("https://%s:%d/console", ip, constants.APIServerPort), nil
 }
 
 func GetHostIP(api libmachine.API) (string, error) {
@@ -605,4 +516,37 @@ func GetHostIP(api libmachine.API) (string, error) {
 		return "", err
 	}
 	return ip, nil
+}
+
+// setProxyToShell set the proxy details to machine env.
+func setProxyToShell(config MachineConfig, h *host.Host) error {
+	if config.ShellProxyEnv.IsEnabled() {
+		fmt.Print("-- Setting proxy information ... ")
+		vmIP, err := h.Driver.GetIP()
+		if err != nil {
+			fmt.Println("FAIL")
+			return fmt.Errorf("Error getting VM IP: %s", err)
+		}
+		hostIP, err := minishiftNetwork.DetermineHostIP(h.Driver)
+		if err != nil {
+			fmt.Println("FAIL")
+			return fmt.Errorf("Error getting host IP: %s", err)
+		}
+
+		if config.UsingLocalProxy {
+			localPropxyAddr := "http://localproxy:3128"
+			config.ShellProxyEnv.OverrideHttpProxy(localPropxyAddr)
+			config.ShellProxyEnv.OverrideHttpsProxy(localPropxyAddr)
+		}
+
+		config.ShellProxyEnv.AddNoProxy(vmIP)
+		config.ShellProxyEnv.AddNoProxy(hostIP)
+		shellProxyEnv := strings.Join(config.ShellProxyEnv.ProxyConfig(), " ")
+		if err := minishiftUtil.SetProxyToShellEnv(h, shellProxyEnv); err != nil {
+			fmt.Println("FAIL")
+			return fmt.Errorf("Error setting proxy to VM: %s", err)
+		}
+		fmt.Println("OK")
+	}
+	return nil
 }

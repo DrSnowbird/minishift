@@ -24,6 +24,7 @@ import (
 	"github.com/minishift/minishift/cmd/minishift/cmd/util"
 	"github.com/minishift/minishift/cmd/minishift/state"
 	"github.com/minishift/minishift/pkg/minikube/constants"
+	instanceState "github.com/minishift/minishift/pkg/minishift/config"
 	"github.com/minishift/minishift/pkg/minishift/openshift"
 	"github.com/minishift/minishift/pkg/util/os/atexit"
 	"github.com/spf13/cobra"
@@ -52,7 +53,11 @@ var registryCmd = &cobra.Command{
 		if registryRoute == nil || !registryRoute.IsEnabled() {
 			registryAddonEnabled = false
 		}
-		registryInfo, err := openshift.GetDockerRegistryInfo(registryAddonEnabled)
+		openshiftVersion := instanceState.InstanceStateConfig.OpenshiftVersion
+		if err != nil {
+			atexit.ExitWithMessage(1, err.Error())
+		}
+		registryInfo, err := openshift.GetDockerRegistryInfo(registryAddonEnabled, openshiftVersion)
 		if err != nil {
 			atexit.ExitWithMessage(1, err.Error())
 		}

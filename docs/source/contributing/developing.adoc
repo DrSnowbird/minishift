@@ -101,14 +101,31 @@ $ go get github.com/golang/dep/cmd/dep
 ----
 
 This will install the `dep` binary into *_$GOPATH/bin_*.
-Make sure to use Dep version 0.3.2 or later.
+Make sure to use Dep version 0.4.1 or later.
 
-[[bootstrap-dependencies]]
-=== Bootstrapping Dependencies
+[[update-dependencies]]
+=== Updating Dependencies
 
-After a clean checkout or after a `make clean`, there won't be a *_vendor_* directory containing the needed {project} dependencies.
+If your work requires a change to the dependencies, you need to update the Dep configuration.
 
-To install the dependencies, you can run the following command:
+. Edit *_Gopkg.toml_* to change the dependencies as needed.
+
+. Run `make vendor` to fetch changed dependencies.
+
+. Test that everything still compiles with changed files in place by running `make clean && make`.
+
+Refer dep documents for more information.
+
+. link:https://golang.github.io/dep/docs/daily-dep.html#updating-dependencies[dep document about updating dependencies]
+
+. link:https://golang.github.io/dep/docs/daily-dep.html#adding-a-new-dependency[dep document about adding a dependency]
+
+[[recreate-vendor-directory]]
+=== Re-creating vendor Directory
+
+If you delete *_vendor_* directory which contain the needed {project} dependencies.
+
+To recreate *_vendor_* directory, you can run the following command:
 
 ----
 $ make vendor
@@ -120,20 +137,6 @@ Alternatively, you can run the Dep command directly.
 ----
 $ dep ensure -v
 ----
-
-[[update-dependencies]]
-=== Updating Dependencies
-
-If your work requires a change to the dependencies, you need to update the Dep configuration.
-
-. Edit *_Gopkg.toml_* to change the dependencies as needed.
-
-. Delete *_Gopkg.lock_* and re-create the vendor directory by running `make vendor`.
-Dep will recognize that there is no lock file and recalculate the required dependencies.
-
-. Check-in the updated *_Gopkg.toml_* and *_Gopkg.lock_* files.
-
-. Test that everything still compiles with the new lock file in place by running `make clean && make`.
 
 [TIP]
 ====
@@ -182,6 +185,14 @@ For more {project} commands and flags, see the xref:../command-ref/minishift.ado
 === Unit Tests
 
 Unit tests run on *Travis* before the code is merged.
+Unit test coverage is then reported to *Codecov* which provides coverage information on the pull requests.
+Locally you can generate a HTML code coverage report by following steps:
+
+----
+$ make coverage
+$ go tool cover -html=out/coverage.txt -o out/coverage.html
+----
+
 To run tests during the development cycle:
 
 ----
@@ -219,7 +230,7 @@ Features for {project} follow these basic concepts:
 
 User stories::
 Features which follow a happy path of user.
-For example, *basic.feature* or *coolstore.feature*.
+For example, the *coolstore.feature*.
 
 Feature and command coverage::
 Features which focuses on specific fields of {project} functionality or individual commands.
@@ -229,7 +240,7 @@ For example, *proxy.feature* or *cmd-version.feature*.
 ==== Running Integration Tests
 
 By default, tests are run against the binary created by `make build` (*_$GOPATH/bin/minishift_*).
-To run the basic test, use the following command:
+To run the quick test, use the following command:
 
 ----
 $ make integration
@@ -237,10 +248,11 @@ $ make integration
 
 [NOTE]
 ====
-`make integration` only runs tests which are tagged as `@basic` by default.
+By default, `make integration` only runs tests that are tagged as `@quick`.
+These tests contain multiple scenarios, but only start {project} once.
 ====
 
-To run all of the tests, use the following command:
+To run all of the tests (except those tagged as `@disabled`), use the following command:
 
 ----
 $ make integration_all
@@ -248,7 +260,9 @@ $ make integration_all
 
 [NOTE]
 ====
-There is also a `make integration_pr` target which is being run as part of pull request testing.
+There is also a `make integration_pr` target which is run as part of pull request testing.
+This target runs the test on all features tagged as `@core`, which covers the basic functionality of {project}.
+This target is a compromise between total run time and coverage.
 ====
 
 ===== Additional Parameters
@@ -263,7 +277,7 @@ $ make integration MINISHIFT_BINARY=<path-to-custom-binary>
 ----
 
 TIMEOUT::
-The `TIMEOUT` parameter can be used to override the default timeout of `3600s`.
+The `TIMEOUT` parameter can be used to override the default timeout of `10800s`.
 To run all the tests with a timeout of `7200s`, use the following command:
 
 ----
@@ -278,6 +292,17 @@ For example, tests can be run against a stopped {project} instance with the imag
 
 ----
 $ make integration_all RUN_BEFORE_FEATURE="start; stop; config set image-caching true"
+----
+
+COPY_OC_FROM::
+
+To test {project} with a non-default `oc` binary you can use the `COPY_OC_FROM` parameter.
+This parameter specifies the path to the `oc` binary which will be copied into the `$MINISHIFT_HOME` folder before each feature run.
+Note that the `oc` binary must be contained in the same directory structure which {project} uses for the storage of `oc` binaries, for example: `<version>/<platform>/oc(.exe)`.
+For example, to test {project} with locally stored `oc v3.7.23` run:
+
+----
+$ make integration COPY_OC_FROM=<path-to-oc-directory>/v3.7.23/<linux or windows or darwin>/oc RUN_BEFORE_FEATURE="config set openshift-version v3.7.23"
 ----
 
 TEST_WITH_SHELL::
@@ -305,6 +330,18 @@ The following options are available:
 
 Tags::
 Use `tags` to ensure that scenarios and features containing at least one of the selected tags are executed.
+To select particular feature, you can use its name as a tag.
+For example, the `cmd-config.feature` contains `@cmd-config` tag through which it can be selected and run with the following command: `make integration GODOG_OPTS=--tags=cmd-config`.
+There are also a few special tags used to indicate specific subsets of integration tests.
+These are the following:
+
+- `@quick` includes `basic.feature` along with several other features and scenarios which do not require a start of {project}.
+Starting the tests with the `@quick` tag covers a variety of scenarios, but only starts {project} once.
+- `@core` includes feature files which cover all of the essential functionality of {project}.
+This tag is used to test pull requests to the {project} repository.
+- `@disabled` indicates broken feature files.
+Any failures on these features are expected.
+All features, scenarios, and steps tagged as `@disabled` will not be run as part of pull request testing or nightly build testing.
 
 Paths::
 Use `paths` to define paths to different feature files or folders containing feature files.
@@ -329,18 +366,19 @@ Passing any value via `GODOG_OPTS` overrides the default tag definition on each 
 Thus in this case `--tags` must be specified manually, otherwise all features will be run.
 ====
 
-For example, to run integration tests on two specific feature files using only `@basic` and `@openshift` tags and without ANSI colors, the following command can be used:
+For example, to run integration tests on two specific feature files using only the `@basic` and `@cmd-addons` tags and without ANSI colors, the following command can be used:
 
 ----
-$ make integration GODOG_OPTS="-paths ~/tests/custom.feature,~/my.feature -tags basic,openshift -no-colors true"
+$ make integration GODOG_OPTS="-paths ~/tests/custom.feature,~/my.feature -tags basic,cmd-addons -no-colors true"
 ----
 
 [NOTE]
 ====
 Multiple values for a `GODOG_OPTS` option must be separated by a comma without whitespace.
-For example, `-tags basic,openshift` will be parsed properly by `make`, whereas `-tags basic, openshift` will result in only `@basic` being used.
+For example, `-tags basic,cmd-openshift` will be parsed properly by `make`, whereas `-tags basic, cmd-openshift` will result in only `@basic` being used.
 ====
 
+[[viewing-results]]
 ==== Viewing Results
 
 The integration test logs its progress directly into a console.
@@ -348,6 +386,40 @@ This information is often enough to find and debug the reason for a failure.
 
 However, for cases which require further investigation, the integration test also logs more detailed progress into a log file.
 This file is located at *_$GOPATH/github.com/minishift/minishift/out/test-results/integration_YYYY-MM-DD_HH:MM:SS.log_*.
+
+[[writing-features]]
+==== Writing features
+
+Minishift integration testsuite offers a comprehensive set of implemented Gherkin steps which allow for comfortable writing of feature files.
+All available steps are defined in the file link:https://github.com/minishift/minishift/blob/master/test/integration/testsuite/testsuite.go[/test/integration/testsuite.go].
+Definitions of steps are simple and self-documenting, for example:
+
+----
+s.Step(`^executing "minishift (.*)" (succeeds|fails)$`,
+    ExecutingMinishiftCommandSucceedsOrFails)
+----
+
+This defines a step which matches regular expression `^executing "minishift (.*)" (succeeds|fails)$`.
+If matched, the two capturing groups are passed as parameters to the function `ExecutingMinishiftCommandSucceedsOrFails(command string, expectedResult string)`, which implements the actual behaviour of the step.
+
+To use the step in the feature file, you need to make sure it matches with the regular expression and prepend one of the Gherkin keywords: `Given`, `When`, `Then`, `And` or `But`, for example:
+
+----
+Then executing "minishift config set memory 3gb" succeeds
+----
+
+[NOTE]
+====
+See the link:https://docs.cucumber.io/gherkin/reference[Gherkin Reference] for more general information about the structure of Gherkin, its features, scenarios, and steps.
+====
+
+[[integration-tests-as-package]]
+==== Using Integration Tests as a Package
+
+Integration tests can be also used as a package outside of the {project} repository.
+You can import it as `github.com/minishift/minishift/test/integration/testsuite`.
+As a starting point for your project you can copy and use the link:https://github.com/minishift/minishift/blob/master/test/integration/integration_test.go[`test/integration/integration_test.go`] file.
+Its key parts are commented to help you to begin with the implementation.
 
 [[format-source-code]]
 === Formatting the Source Code

@@ -25,7 +25,7 @@ ignored = ["github.com/Sirupsen/logrus"]
 
 [[constraint]]
   name = "github.com/DATA-DOG/godog"
-  version = "=0.7.4"
+  version = "=0.7.6"
 
 [[constraint]]
   name = "github.com/asaskevich/govalidator"
@@ -41,11 +41,8 @@ ignored = ["github.com/Sirupsen/logrus"]
 
 [[constraint]]
   name = "github.com/docker/machine"
-  version = "=0.13.0"
-
-[[constraint]]
-  name = "github.com/elazarl/goproxy"
-  revision = "aacba83f36a55ac31cbb71c06547a328c0cd1604"
+  revision = "6f34be407f21920decfd3c031f64e500e66979da"
+  source = "github.com/machine-drivers/machine"
 
 [[constraint]]
   name = "github.com/gbraad/go-hvkvp"
@@ -58,11 +55,7 @@ ignored = ["github.com/Sirupsen/logrus"]
 
 [[constraint]]
   name = "github.com/google/go-github"
-  revision = "30a21ee1a3839fb4a408efe331f226b73faac379"
-
-[[constraint]]
-  name = "github.com/gorillalabs/go-powershell"
-  revision = "3bc7a60b1df80a5766820c4a53d59668f4553f75"
+  version = "=15.0.0"
 
 [[constraint]]
   name = "github.com/inconshreveable/go-update"
@@ -107,7 +100,7 @@ ignored = ["github.com/Sirupsen/logrus"]
 # Get all dependencies for containers/image which is used for OCI image chaching
 [[constraint]]
   name = "github.com/containers/image"
-  revision = "8b24210344a448e58be6ed53636e2eacaa30be32"
+  revision = "5cc7850824afe2b4fb016f8906666b358c50dc31"
 
 [[constraint]]
   name = "github.com/opencontainers/runc"
@@ -115,13 +108,17 @@ ignored = ["github.com/Sirupsen/logrus"]
 
 [[constraint]]
   name = "github.com/docker/go-connections"
-  revision = "3ede32e2033de7505e6500d6c868c2b9ed9f169d"
+  revision = "7beb39f0b969b075d1325fecb092faf27fd357b6"
+
+[[override]]
+  name = "github.com/containers/storage"
+  revision = "68332c059156eae970a03245cfcd4d717fb66ecd"
 
 # Use override for docker/docker and docker/distribution to ensure we get the specfied version.
 # In particular we need a version which uses the altest logrus
 [[override]]
   name = "github.com/docker/docker"
-  revision = "30eb4d8cdc422b023d5f11f29a82ecb73554183b"
+  revision = "da99009bbb1165d1ac5688b5c81d2f589d418341"
 
 [[override]]
   name = "github.com/docker/distribution"
@@ -129,7 +126,7 @@ ignored = ["github.com/Sirupsen/logrus"]
 
 [[constraint]]
   name = "github.com/opencontainers/image-spec"
-  version = "=v1.0.0"
+  version = "=v1.0.1"
 
 [[constraint]]
   name = "gopkg.in/yaml.v2"
@@ -165,8 +162,38 @@ ignored = ["github.com/Sirupsen/logrus"]
 
 [[constraint]]
   name = "golang.org/x/sys"
-  revision = "43e60d72a8e2bd92ee98319ba9a384a0e9837c08"
+  branch = "master"
 
 [[constraint]]
   name = "github.com/opencontainers/go-digest"
   revision = "aa2ec055abd10d26d539eb630a92241b781ce4bc"
+
+[[constraint]]
+  name = "github.com/stretchr/testify"
+  version = "=v1.2.0"
+
+[[constraint]]
+  name = "github.com/pkg/sftp"
+  version = "1.0.0"
+
+[[constraint]]
+  name = "github.com/mitchellh/go-homedir"
+  revision = "b8bc1bf767474819792c23f32d8286a45736f1c6"
+
+[[constraint]]
+  name = "github.com/elazarl/goproxy"
+  revision = "93c365f5468fdbc21f2d55a7e39cc4bced996971"
+  source = "github.com/gbraad/goproxy"
+
+[[constraint]]
+  name = "github.com/anjannath/systray"
+  revision = "26ec25aa9aaa5a0142dfe61525a604914795e424"
+
+[[constraint]]
+  name = "github.com/zalando/go-keyring"
+  revision = "6d81c293b3fbc8a9b1bcf4bc9c167c2e1d1f52cf"
+
+[prune]
+  go-tests = true
+  non-go = true
+  unused-packages = true

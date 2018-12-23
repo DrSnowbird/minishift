@@ -17,44 +17,88 @@ limitations under the License.
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 
-	"github.com/minishift/minishift/pkg/util/filehelper"
-
 	"github.com/docker/machine/libmachine/drivers"
 	configCmd "github.com/minishift/minishift/cmd/minishift/cmd/config"
+	"github.com/minishift/minishift/pkg/minikube/constants"
 	validations "github.com/minishift/minishift/pkg/minishift/config"
+	minishiftConstants "github.com/minishift/minishift/pkg/minishift/constants"
+	"github.com/minishift/minishift/pkg/minishift/network"
 	"github.com/minishift/minishift/pkg/minishift/shell/powershell"
-	minishiftUtil "github.com/minishift/minishift/pkg/minishift/util"
+	"github.com/minishift/minishift/pkg/util/github"
 
 	"github.com/minishift/minishift/pkg/util/os/atexit"
 	"github.com/spf13/viper"
 
-	cmdUtils "github.com/minishift/minishift/cmd/minishift/cmd/util"
-	"github.com/minishift/minishift/pkg/minishift/constants"
+	cmdUtil "github.com/minishift/minishift/cmd/minishift/cmd/util"
+	minishiftNetwork "github.com/minishift/minishift/pkg/minishift/network"
+	openshiftVersion "github.com/minishift/minishift/pkg/minishift/openshift/version"
 	stringUtils "github.com/minishift/minishift/pkg/util/strings"
 )
 
 const (
-	StorageDisk = "/mnt/sda1"
+	StorageDisk           = "/mnt/?da1"
+	StorageDiskForGeneric = "/"
+	GithubAddress         = "https://github.com"
 )
 
-// preflightChecksAfterStartingHost is executed before the startHost function.
+// preflightChecksBeforeStartingHost is executed before the startHost function.
 func preflightChecksBeforeStartingHost() {
-	driverErrorMessage := "See the 'Setting Up the Driver Plug-in' topic (https://docs.openshift.org/latest/minishift/getting-started/setting-up-driver-plugin.html) for more information"
+	if shouldPreflightChecksBeSkipped() {
+		return
+	}
+	driverErrorMessage := "See the 'Setting Up the Virtualization Environment' topic (https://docs.okd.io/latest/minishift/getting-started/setting-up-virtualization-environment.html) for more information"
+	prerequisiteErrorMessage := "See the 'Installing Prerequisites for Minishift' topic (https://docs.okd.io/latest/minishift/getting-started/installing.html#install-prerequisites) for more information"
+
+	preflightCheckSucceedsOrFails(
+		configCmd.SkipDeprecationCheck.Name,
+		checkDeprecation,
+		"Check if deprecated options are used",
+		configCmd.WarnDeprecationCheck.Name,
+		"")
+
+	requestedOpenShiftVersion, _ := cmdUtil.GetOpenShiftReleaseVersion()
+
+	// Connectivity logic
+	fmt.Printf("-- Checking if %s is reachable ... ", GithubAddress)
+	if network.CheckInternetConnectivity(GithubAddress) {
+		fmt.Printf("OK\n")
+		preflightCheckSucceedsOrFails(
+			configCmd.SkipCheckOpenShiftRelease.Name,
+			checkOriginRelease,
+			fmt.Sprintf("Checking if requested OpenShift version '%s' is valid", requestedOpenShiftVersion),
+			configCmd.WarnCheckOpenShiftRelease.Name,
+			"",
+		)
+	} else {
+		fmt.Printf("FAIL\n")
+		fmt.Printf("-- Checking if requested OpenShift version '%s' is valid ... SKIP\n", requestedOpenShiftVersion)
+	}
+	// end of connectivity logic
+
+	preflightCheckSucceedsOrFails(
+		configCmd.SkipCheckOpenShiftVersion.Name,
+		validateOpenshiftVersion,
+		fmt.Sprintf("Checking if requested OpenShift version '%s' is supported", requestedOpenShiftVersion),
+		configCmd.WarnCheckOpenShiftVersion.Name,
+		fmt.Sprintf("Minishift does not support OpenShift version %s. "+
+			"You need to use a version >= %s\n", requestedOpenShiftVersion,
+			constants.MinimumSupportedOpenShiftVersion),
+	)
 
 	preflightCheckSucceedsOrFails(
 		configCmd.SkipCheckVMDriver.Name,
 		checkVMDriver,
 		fmt.Sprintf("Checking if requested hypervisor '%s' is supported on this platform", viper.GetString(configCmd.VmDriver.Name)),
-		false, configCmd.WarnCheckVMDriver.Name,
+		configCmd.WarnCheckVMDriver.Name,
 		driverErrorMessage)
 
 	switch viper.GetString(configCmd.VmDriver.Name) {
@@ -63,93 +107,110 @@ func preflightChecksBeforeStartingHost() {
 			configCmd.SkipCheckXHyveDriver.Name,
 			checkXhyveDriver,
 			"Checking if xhyve driver is installed",
-			false, configCmd.WarnCheckXHyveDriver.Name,
+			configCmd.WarnCheckXHyveDriver.Name,
 			driverErrorMessage)
 	case "kvm":
 		preflightCheckSucceedsOrFails(
 			configCmd.SkipCheckKVMDriver.Name,
 			checkKvmDriver,
 			"Checking if KVM driver is installed",
-			false, configCmd.WarnCheckKVMDriver.Name,
+			configCmd.WarnCheckKVMDriver.Name,
 			driverErrorMessage)
 		preflightCheckSucceedsOrFails(
 			configCmd.SkipCheckKVMDriver.Name,
 			checkLibvirtInstalled,
 			"Checking if Libvirt is installed",
-			false, configCmd.WarnCheckKVMDriver.Name,
+			configCmd.WarnCheckKVMDriver.Name,
 			driverErrorMessage)
 		preflightCheckSucceedsOrFails(
 			configCmd.SkipCheckKVMDriver.Name,
 			checkLibvirtDefaultNetworkExists,
 			"Checking if Libvirt default network is present",
-			false, configCmd.WarnCheckKVMDriver.Name,
+			configCmd.WarnCheckKVMDriver.Name,
 			driverErrorMessage)
 		preflightCheckSucceedsOrFails(
 			configCmd.SkipCheckKVMDriver.Name,
 			checkLibvirtDefaultNetworkActive,
 			"Checking if Libvirt default network is active",
-			true, configCmd.WarnCheckKVMDriver.Name,
+			configCmd.WarnCheckKVMDriver.Name,
 			driverErrorMessage)
 	case "hyperv":
 		preflightCheckSucceedsOrFails(
 			configCmd.SkipCheckHyperVDriver.Name,
 			checkHypervDriverInstalled,
 			"Checking if Hyper-V driver is installed",
-			false, configCmd.WarnCheckHyperVDriver.Name,
+			configCmd.WarnCheckHyperVDriver.Name,
 			driverErrorMessage)
 		preflightCheckSucceedsOrFails(
 			configCmd.SkipCheckHyperVDriver.Name,
 			checkHypervDriverSwitch,
 			"Checking if Hyper-V driver is configured to use a Virtual Switch",
-			false, configCmd.WarnCheckHyperVDriver.Name,
+			configCmd.WarnCheckHyperVDriver.Name,
 			driverErrorMessage)
 		preflightCheckSucceedsOrFails(
 			configCmd.SkipCheckHyperVDriver.Name,
 			checkHypervDriverUser,
 			"Checking if user is a member of the Hyper-V Administrators group",
-			false, configCmd.WarnCheckHyperVDriver.Name,
+			configCmd.WarnCheckHyperVDriver.Name,
 			driverErrorMessage)
+	case "virtualbox":
+		preflightCheckSucceedsOrFails(
+			configCmd.SkipCheckVBoxInstalled.Name,
+			checkVBoxInstalled,
+			"Checking if VirtualBox is installed",
+			configCmd.WarnCheckVBoxInstalled.Name,
+			prerequisiteErrorMessage)
+
 	}
 
 	preflightCheckSucceedsOrFails(
 		configCmd.SkipCheckIsoUrl.Name,
 		checkIsoURL,
 		"Checking the ISO URL",
-		false, configCmd.WarnCheckIsoUrl.Name,
-		"See the 'Basic Usage' topic (https://docs.openshift.org/latest/minishift/using/basic-usage.html) for more information")
+		configCmd.WarnCheckIsoUrl.Name,
+		"See the 'Basic Usage' topic (https://docs.okd.io/latest/minishift/using/basic-usage.html) for more information")
 }
 
 // preflightChecksAfterStartingHost is executed after the startHost function.
 func preflightChecksAfterStartingHost(driver drivers.Driver) {
+	if shouldPreflightChecksBeSkipped() {
+		return
+	}
 	preflightCheckSucceedsOrFailsWithDriver(
 		configCmd.SkipInstanceIP.Name,
 		checkInstanceIP, driver,
 		"Checking for IP address",
-		false, configCmd.WarnInstanceIP.Name,
+		configCmd.WarnInstanceIP.Name,
 		"Error determining IP address")
+	preflightCheckSucceedsOrFailsWithDriver(
+		configCmd.SkipCheckNameservers.Name,
+		checkNameservers, driver,
+		"Checking for nameservers",
+		configCmd.WarnCheckNameservers.Name,
+		"VM does not have any nameserver setup")
 	preflightCheckSucceedsOrFailsWithDriver(
 		configCmd.SkipCheckNetworkPing.Name,
 		checkIPConnectivity, driver,
 		"Checking if external host is reachable from the Minishift VM",
-		true, configCmd.WarnCheckNetworkPing.Name,
+		configCmd.WarnCheckNetworkPing.Name,
 		"VM is unable to ping external host")
 	preflightCheckSucceedsOrFailsWithDriver(
 		configCmd.SkipCheckNetworkHTTP.Name,
 		checkHttpConnectivity, driver,
 		"Checking HTTP connectivity from the VM",
-		true, configCmd.WarnCheckNetworkHTTP.Name,
+		configCmd.WarnCheckNetworkHTTP.Name,
 		"VM cannot connect to external URL with HTTP")
 	preflightCheckSucceedsOrFailsWithDriver(
 		configCmd.SkipCheckStorageMount.Name,
 		checkStorageMounted, driver,
 		"Checking if persistent storage volume is mounted",
-		false, configCmd.WarnCheckStorageMount.Name,
+		configCmd.WarnCheckStorageMount.Name,
 		"Persistent volume storage is not mounted")
 	preflightCheckSucceedsOrFailsWithDriver(
 		configCmd.SkipCheckStorageUsage.Name,
 		checkStorageUsage, driver,
 		"Checking available disk space",
-		false, configCmd.WarnCheckStorageUsage.Name,
+		configCmd.WarnCheckStorageUsage.Name,
 		"Insufficient disk space on the persistent storage volume")
 }
 
@@ -166,7 +227,7 @@ type preflightCheckWithDriverFunc func(driver drivers.Driver) bool
 // cause is. It takes configNameOverrideIfSkipped to allow skipping the test.
 // While treatAsWarning and configNameOverrideIfWarning can be used to make the
 // test to be treated as a warning instead.
-func preflightCheckSucceedsOrFails(configNameOverrideIfSkipped string, execute preflightCheckFunc, message string, treatAsWarning bool, configNameOverrideIfWarning string, errorMessage string) {
+func preflightCheckSucceedsOrFails(configNameOverrideIfSkipped string, execute preflightCheckFunc, message string, configNameOverrideIfWarning string, errorMessage string) {
 	fmt.Printf("-- %s ... ", message)
 
 	isConfiguredToSkip := viper.GetBool(configNameOverrideIfSkipped)
@@ -184,7 +245,7 @@ func preflightCheckSucceedsOrFails(configNameOverrideIfSkipped string, execute p
 
 	fmt.Println("FAIL")
 	errorMessage = fmt.Sprintf("   %s", errorMessage)
-	if isConfiguredToWarn || treatAsWarning {
+	if isConfiguredToWarn {
 		fmt.Println(errorMessage)
 	} else {
 		atexit.ExitWithMessage(1, errorMessage)
@@ -198,7 +259,7 @@ func preflightCheckSucceedsOrFails(configNameOverrideIfSkipped string, execute p
 // configNameOverrideIfSkipped to allow skipping the test. While treatAsWarning
 // and configNameOverrideIfWarning can be used to make the test to be treated as
 // a warning instead.
-func preflightCheckSucceedsOrFailsWithDriver(configNameOverrideIfSkipped string, execute preflightCheckWithDriverFunc, driver drivers.Driver, message string, treatAsWarning bool, configNameOverrideIfWarning string, errorMessage string) {
+func preflightCheckSucceedsOrFailsWithDriver(configNameOverrideIfSkipped string, execute preflightCheckWithDriverFunc, driver drivers.Driver, message string, configNameOverrideIfWarning string, errorMessage string) {
 	fmt.Printf("-- %s ... ", message)
 
 	isConfiguredToSkip := viper.GetBool(configNameOverrideIfSkipped)
@@ -216,11 +277,21 @@ func preflightCheckSucceedsOrFailsWithDriver(configNameOverrideIfSkipped string,
 
 	fmt.Println("FAIL")
 	errorMessage = fmt.Sprintf("   %s", errorMessage)
-	if isConfiguredToWarn || treatAsWarning {
+	if isConfiguredToWarn {
 		fmt.Println(errorMessage)
 	} else {
 		atexit.ExitWithMessage(1, errorMessage)
 	}
+}
+
+func checkDeprecation() bool {
+	// Check for deprecated options
+	switchValue := os.Getenv("HYPERV_VIRTUAL_SWITCH")
+	if switchValue != "" {
+		fmt.Println("\n   Use of HYPERV_VIRTUAL_SWITCH has been deprecated\n   Please use: minishift config set hyperv-virtual-switch", switchValue)
+		return false
+	}
+	return true
 }
 
 // checkXhyveDriver returns true if xhyve driver is available on path and has
@@ -315,7 +386,8 @@ func checkLibvirtDefaultNetworkExists() bool {
 //checkLibvirtDefaultNetworkActive returns true if the "default" network is active
 func checkLibvirtDefaultNetworkActive() bool {
 	cmd := exec.Command("virsh", "--connect", "qemu:///system", "net-list")
-	cmd.Env = cmdUtils.ReplaceEnv(os.Environ(), "LC_ALL", "C")
+	cmd.Env = cmdUtil.ReplaceEnv(os.Environ(), "LC_ALL", "C")
+	cmd.Env = cmdUtil.ReplaceEnv(cmd.Env, "LANG", "C")
 	stdOutStdError, err := cmd.CombinedOutput()
 	if err != nil {
 		return false
@@ -338,23 +410,45 @@ func checkLibvirtDefaultNetworkActive() bool {
 
 // checkHypervDriverSwitch returns true if Virtual Switch has been selected
 func checkHypervDriverSwitch() bool {
-	switchEnv := os.Getenv("HYPERV_VIRTUAL_SWITCH")
-	if switchEnv == "" {
-		return false
+	posh := powershell.New()
+
+	switchName := viper.GetString(configCmd.HypervVirtualSwitch.Name)
+
+	// check for default switch by using the Id
+	if switchName == minishiftConstants.HypervDefaultVirtualSwitchName {
+		checkIfDefaultSwitchExists := fmt.Sprintf("Get-VMSwitch -Id %s | ForEach-Object { $_.Name }", minishiftConstants.HypervDefaultVirtualSwitchId)
+		stdOut, stdErr, _ := posh.Execute(checkIfDefaultSwitchExists)
+
+		if !strings.Contains(stdErr, "Get-VMSwitch") {
+			// force setting the config variable
+			switchName = stringUtils.ParseLines(stdOut)[0]
+			viper.Set(configCmd.HypervVirtualSwitch.Name, switchName)
+		}
 	}
 
-	return true
+	fmt.Printf("\n   '%s' ... ", switchName)
+	err := validations.IsValidHypervVirtualSwitch("hyperv-virtual-switch", switchName)
+	return err == nil
 }
 
 // checkHypervDriverInstalled returns true if Hyper-V driver is installed
 func checkHypervDriverInstalled() bool {
-	posh := powershell.New()
-
-	checkIfHyperVInstalled := `@(Get-Command Get-VM).ModuleName`
-	stdOut, _ := posh.Execute(checkIfHyperVInstalled)
-	if !strings.Contains(stdOut, "Hyper-V") {
+	// Check if Hyper-V's Virtual Machine Management Service is installed
+	_, err := exec.LookPath("vmms.exe")
+	if err != nil {
 		return false
 	}
+
+	// check to see if a hypervisor is present. if hyper-v is installed and enabled,
+	posh := powershell.New()
+
+	checkHypervisorPresent := `@(Get-Wmiobject Win32_ComputerSystem).HypervisorPresent`
+
+	stdOut, _, _ := posh.Execute(checkHypervisorPresent)
+	if !strings.Contains(stdOut, "True") {
+		return false
+	}
+
 	return true
 }
 
@@ -365,8 +459,13 @@ func checkHypervDriverUser() bool {
 	// Use RID to prevent issues with localized groups: https://github.com/minishift/minishift/issues/1541
 	// https://support.microsoft.com/en-us/help/243330/well-known-security-identifiers-in-windows-operating-systems
 	// BUILTIN\Hyper-V Administrators => S-1-5-32-578
-	checkIfMemberOfHyperVAdmins := `@([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole("S-1-5-32-578")`
-	stdOut, _ := posh.Execute(checkIfMemberOfHyperVAdmins)
+
+	//Hyper-V Administrators group check fails: https://github.com/minishift/minishift/issues/2047
+	//Using SecurityIdentifier overload of IsInRole()
+	checkIfMemberOfHyperVAdmins :=
+		`$sid = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-578")
+	@([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole($sid)`
+	stdOut, _, _ := posh.Execute(checkIfMemberOfHyperVAdmins)
 	if !strings.Contains(stdOut, "True") {
 		return false
 	}
@@ -385,39 +484,38 @@ func checkInstanceIP(driver drivers.Driver) bool {
 	return false
 }
 
+// checkNameservers will return true if the instance has nameservers
+func checkNameservers(driver drivers.Driver) bool {
+	return minishiftNetwork.HasNameserversConfigured(driver)
+}
+
 // checkIPConnectivity checks if the VM has connectivity to the outside network
 func checkIPConnectivity(driver drivers.Driver) bool {
 	ipToPing := viper.GetString(configCmd.CheckNetworkPingHost.Name)
-	if ipToPing == "" {
-		ipToPing = "8.8.8.8"
-	}
 
 	fmt.Printf("\n   Pinging %s ... ", ipToPing)
-	return minishiftUtil.IsIPReachable(driver, ipToPing, false)
+	return minishiftNetwork.IsIPReachable(driver, ipToPing, false)
 }
 
 // checkHttpConnectivity allows to test outside connectivity and possible proxy support
 func checkHttpConnectivity(driver drivers.Driver) bool {
 	urlToRetrieve := viper.GetString(configCmd.CheckNetworkHttpHost.Name)
-	if urlToRetrieve == "" {
-		urlToRetrieve = "http://minishift.io/index.html"
-	}
 
 	fmt.Printf("\n   Retrieving %s ... ", urlToRetrieve)
-	return minishiftUtil.IsRetrievable(driver, urlToRetrieve, false)
+	return minishiftNetwork.IsRetrievable(driver, urlToRetrieve, false)
 }
 
-// checkStorageMounted checks if the peristent storage volume, storageDisk, is
+// checkStorageMounted checks if the persistent storage volume, storageDisk, is
 // mounted to the VM instance
 func checkStorageMounted(driver drivers.Driver) bool {
 	mounted, _ := isMounted(driver, StorageDisk)
 	return mounted
 }
 
-// checkStorageUsage checks if the peristent storage volume has enough storage
+// checkStorageUsage checks if the persistent storage volume has enough storage
 // space available.
 func checkStorageUsage(driver drivers.Driver) bool {
-	_, usedPercentage := getDiskUsage(driver, StorageDisk)
+	_, usedPercentage, _ := getDiskUsage(driver, StorageDisk)
 	fmt.Printf("%s used ", usedPercentage)
 	usage, err := strconv.Atoi(stringUtils.GetOnlyNumbers(usedPercentage))
 	if err != nil {
@@ -434,20 +532,21 @@ func checkStorageUsage(driver drivers.Driver) bool {
 }
 
 // isMounted checks returns usage of mountpoint known to the VM instance
-func getDiskUsage(driver drivers.Driver, mountpoint string) (string, string) {
+func getDiskUsage(driver drivers.Driver, mountpoint string) (string, string, string) {
 	cmd := fmt.Sprintf(
-		"df -h %s | awk 'FNR > 1 {print $2,$5}'",
+		"df -h %s | awk 'FNR > 1 {print $2,$5,$6}'",
 		mountpoint)
 
 	out, err := drivers.RunSSHCommandFromDriver(driver, cmd)
 
 	if err != nil {
-		return "", "ERR"
+		return "", "ERR", ""
 	}
 	diskDetails := strings.Split(strings.Trim(out, "\n"), " ")
 	diskSize := diskDetails[0]
 	diskUsage := diskDetails[1]
-	return diskSize, diskUsage
+	diskMountPoint := diskDetails[2]
+	return diskSize, diskUsage, diskMountPoint
 }
 
 // isMounted checks if mountpoint is mounted to the VM instance
@@ -471,44 +570,48 @@ func isMounted(driver drivers.Driver, mountpoint string) (bool, error) {
 // checkIsoUrl checks the Iso url and returns true if the iso file exists
 func checkIsoURL() bool {
 	isoUrl := viper.GetString(configCmd.ISOUrl.Name)
-	for _, isoAlias := range constants.ValidIsoAliases {
-		if isoUrl == isoAlias {
-			return true
-		}
-	}
-
-	if !strings.HasSuffix(isoUrl, ".iso") {
+	err := validations.IsValidISOUrl(configCmd.ISOUrl.Name, isoUrl)
+	if err != nil {
 		return false
 	}
-
-	match, _ := regexp.MatchString(`^https?://`, isoUrl)
-	if match {
-		return true
-	}
-
-	if runtime.GOOS == "windows" {
-		match, _ := regexp.MatchString("^file://[a-zA-Z]:/.+", isoUrl)
-		if !match {
-			return false
-		}
-		if filehelper.Exists(strings.Replace(strings.TrimPrefix(isoUrl, "file://"), "/", "\\", -1)) {
-			return true
-		}
-	} else {
-		match, _ := regexp.MatchString("^file:///.+", isoUrl)
-		if !match {
-			return false
-		}
-		if filehelper.Exists(strings.TrimPrefix(isoUrl, "file://")) {
-			return true
-		}
-	}
-	return false
+	return true
 }
 
 func checkVMDriver() bool {
 	err := validations.IsValidDriver(configCmd.VmDriver.Name, viper.GetString(configCmd.VmDriver.Name))
 	if err != nil {
+		return false
+	}
+	return true
+}
+
+func validateOpenshiftVersion() bool {
+	requestedOpenShiftVersion, _ := cmdUtil.GetOpenShiftReleaseVersion()
+	valid, err := openshiftVersion.IsGreaterOrEqualToBaseVersion(requestedOpenShiftVersion, constants.MinimumSupportedOpenShiftVersion)
+	if err != nil {
+		return false
+	}
+
+	if !valid {
+		return false
+	}
+	return true
+}
+
+// checkOriginRelease return true if specified version of OpenShift is released
+func checkOriginRelease() bool {
+	client := github.Client()
+	ctx := context.Background()
+
+	requestedOpenShiftVersion, _ := cmdUtil.GetOpenShiftReleaseVersion()
+	_, _, err := client.Repositories.GetReleaseByTag(ctx, "openshift", "origin", requestedOpenShiftVersion)
+	if err != nil && github.IsRateLimitError(err) {
+		fmt.Println("\n   Hit github rate limit:", err)
+		return false
+	}
+
+	if err != nil {
+		fmt.Printf("%s is not a valid OpenShift version", requestedOpenShiftVersion)
 		return false
 	}
 	return true

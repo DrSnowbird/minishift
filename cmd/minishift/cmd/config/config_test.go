@@ -18,8 +18,10 @@ package config
 
 import (
 	"bytes"
-	"reflect"
 	"testing"
+
+	"github.com/minishift/minishift/pkg/minishift/config"
+	"github.com/stretchr/testify/assert"
 )
 
 type configTestCase struct {
@@ -48,11 +50,11 @@ var configTestCases = []configTestCase{
     "vm-driver": "kvm"
 }`,
 		config: map[string]interface{}{
-			"iso-url":   "http://foo.bar/minishift-centos.iso",
-			"vm-driver": "kvm",
-			"cpus":      4,
-			"disk-size": "20g",
-			"v":         5,
+			"iso-url":                   "http://foo.bar/minishift-centos.iso",
+			"vm-driver":                 "kvm",
+			"cpus":                      4,
+			"disk-size":                 "20g",
+			"v":                         5,
 			"show-libmachine-logs":      true,
 			"log_dir":                   "/etc/hosts",
 			"ReminderWaitPeriodInHours": 99,
@@ -95,23 +97,18 @@ var configTestCases = []configTestCase{
 func TestReadConfig(t *testing.T) {
 	for _, tt := range configTestCases {
 		r := bytes.NewBufferString(tt.data)
-		config, err := decode(r)
-		if reflect.DeepEqual(config, tt.config) || err != nil {
-			t.Errorf("Cannot decode config. \n\n expected %+v, \n\n received %+v \n\n err %+v", tt.config, config, err)
-		}
+		config, err := config.Decode(r)
+		assert.NoError(t, err, "Error Decoding config")
+		assert.ObjectsAreEqualValues(tt.data, config)
 	}
 }
 
 func TestWriteConfig(t *testing.T) {
 	var b bytes.Buffer
 	for _, tt := range configTestCases {
-		err := encode(&b, tt.config)
-		if err != nil {
-			t.Errorf("Error encoding: %s", err)
-		}
-		if b.String() != tt.data {
-			t.Errorf("Cannot encode config. \n\n expected \n %+v, \n\n received \n %+v \n\n err %+v", tt.data, b.String(), err)
-		}
+		err := config.Encode(&b, tt.config)
+		assert.NoError(t, err, "Error Encoding config")
+		assert.Equal(t, b.String(), tt.data)
 		b.Reset()
 	}
 }

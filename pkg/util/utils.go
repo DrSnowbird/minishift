@@ -19,6 +19,9 @@ package util
 import (
 	"fmt"
 	"io"
+	"os"
+	"os/user"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -97,39 +100,6 @@ func (m MultiError) ToError() error {
 	return fmt.Errorf(strings.Join(errStrings, "\n"))
 }
 
-func VersionOrdinal(version string) string {
-	// ISO/IEC 14651:2011
-	// https://www.iso.org/standard/57976.html
-	// This method is applicable for 255 characters string
-	// to determine their collating order in a sorted list.
-	// It create a collating sorted list and return the string.
-	const maxByte = 1<<8 - 1
-	vo := make([]byte, 0, len(version)+8)
-	j := -1
-	for i := 0; i < len(version); i++ {
-		b := version[i]
-		if '0' > b || b > '9' {
-			vo = append(vo, b)
-			j = -1
-			continue
-		}
-		if j == -1 {
-			vo = append(vo, 0x00)
-			j = len(vo) - 1
-		}
-		if vo[j] == 1 && vo[j+1] == '0' {
-			vo[j+1] = b
-			continue
-		}
-		if vo[j]+1 > maxByte {
-			panic("VersionOrdinal: invalid version")
-		}
-		vo = append(vo, b)
-		vo[j]++
-	}
-	return string(vo)
-}
-
 // TimeTrack is used to time the execution of a method. It is passed the start time as well as a output writer for the timing.
 // The usage of TimeTrack is in combination with defer like so:
 //
@@ -165,4 +135,42 @@ func FriendlyDuration(d time.Duration) time.Duration {
 
 	d2 := (d / time.Nanosecond) * (time.Nanosecond)
 	return d2
+}
+
+// CommandExecutesSuccessfully returns true if the command executed based on the exit code
+func CommandExecutesSuccessfully(cmd string, args ...string) bool {
+	var runner Runner = &RealRunner{}
+	var stdOut, stdErr io.Writer
+
+	exitCode := runner.Run(stdOut, stdErr, cmd, args...)
+
+	if exitCode == 0 {
+		return true
+	}
+	return false
+}
+
+// IsDirectoryWritable checks if the directory is writable or not
+// by trying creating a temporary file
+// Return true if directory is writable else false
+func IsDirectoryWritable(path string) bool {
+	tmpFilePath := filepath.Join(path, "tmp")
+	_, err := os.Create(tmpFilePath)
+	if err != nil {
+		return false
+	}
+	defer os.Remove(tmpFilePath)
+
+	return true
+}
+
+// IsAdministrativeUser returns true when user is either root or
+// Administrator
+func IsAdministrativeUser() bool {
+	u, _ := user.Current()
+	username := strings.ToLower(u.Username)
+
+	return u.Uid == "1" ||
+		username == "root" ||
+		strings.Contains(username, "administrator")
 }

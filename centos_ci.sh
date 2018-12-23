@@ -29,7 +29,7 @@ LATEST="latest"
 function load_jenkins_vars() {
   if [ -e "jenkins-env" ]; then
     cat jenkins-env \
-      | grep -E "(JENKINS_URL|GIT_BRANCH|GIT_COMMIT|BUILD_NUMBER|ghprbSourceBranch|ghprbActualCommit|BUILD_URL|ghprbPullId|GH_TOKEN|CICO_API_KEY|API_TOKEN|JOB_NAME|RELEASE_VERSION|GITHUB_TOKEN|REPO|BRANCH)=" \
+      | grep -E "(JENKINS_URL|GIT_BRANCH|GIT_COMMIT|BUILD_NUMBER|ghprbSourceBranch|ghprbActualCommit|BUILD_URL|ghprbPullId|GH_TOKEN|CICO_API_KEY|API_TOKEN|JOB_NAME|RELEASE_VERSION|GITHUB_TOKEN|REPO|BRANCH|SKIP_INTEGRATION_TEST)=" \
       | sed 's/^/export /g' \
       > ~/.jenkins-env
     source ~/.jenkins-env
@@ -39,16 +39,12 @@ function load_jenkins_vars() {
 }
 
 function install_core_deps() {
-  # We need to disable selinux for now, XXX
-  /usr/sbin/setenforce 0
-
   # Install EPEL repo
   yum -y install epel-release
   # Get all the deps in
   # We are installing golang from offical repository to make sure our downstream builds works as expected.
   # CDK side golang always comes from the offical RHEL repository.
   yum -y install gcc \
-                 golang \
                  make \
                  tar \
                  zip \
@@ -58,6 +54,22 @@ function install_core_deps() {
 
   echo 'CICO: Core dependencies installed'
 }
+
+function install_golang() {
+  # Install virt7-container-common-candidate to install latest golang package
+  # from the repo
+  cat > /etc/yum.repos.d/virt7-container-common-candidate.repo << EOF
+[virt7-container-common-candidate]
+name=virt7-container-common-candidate
+baseurl=https://cbs.centos.org/repos/virt7-container-common-candidate/x86_64/os/
+enabled=1
+gpgcheck=0
+EOF
+  yum -y install golang
+
+  echo 'CICO: Golang installed'
+}
+
 
 function install_kvm_virt() {
   sudo yum -y install kvm \
@@ -101,7 +113,7 @@ function prepare_ci_user() {
 
 ####### Below functions are executed by minishift_ci user
 function setup_kvm_docker_machine_driver() {
-  curl -L https://github.com/dhiltgen/docker-machine-kvm/releases/download/v0.7.0/docker-machine-driver-kvm > docker-machine-driver-kvm && \
+  curl -L https://github.com/dhiltgen/docker-machine-kvm/releases/download/v0.10.0/docker-machine-driver-kvm-centos7 > docker-machine-driver-kvm && \
   chmod +x docker-machine-driver-kvm && sudo mv docker-machine-driver-kvm /usr/local/bin/docker-machine-driver-kvm
   echo 'CICO: Setup KVM docker-machine driver setup successfully'
 }
@@ -123,7 +135,7 @@ function setup_repo() {
 
 function setup_godep() {
   GODEP_OS_ARCH=`go env GOHOSTOS`-`go env GOHOSTARCH`
-  GODEP_TAG=v0.3.2
+  GODEP_TAG=v0.4.1
   GODEP_LATEST_RELEASE_URL="https://github.com/golang/dep/releases/download/${GODEP_TAG}/dep-${GODEP_OS_ARCH}"
   mkdir /tmp/godep
   curl -L ${GODEP_LATEST_RELEASE_URL} -o /tmp/godep/dep
@@ -150,7 +162,7 @@ function install_docs_prerequisite_packages() {
                      java-1.7.0-openjdk-devel
 
   # Install RVM
-  gpg2 --keyserver hkp://keys.gnupg.net --recv-keys D39DC0E3
+  gpg2 --keyserver hkp://keys.gnupg.net --recv-keys 409B6B1796C275462A1703113804BB82D39DC0E3 7D2BAF1CF37B13E2069D6956105BD0E739499BDB
   curl -L get.rvm.io | bash -s stable
   source ~/.profile
 
@@ -158,7 +170,7 @@ function install_docs_prerequisite_packages() {
   rvm install ruby-2.2.5
   echo "CICO: RVM and Ruby Installed"
 
-  gem install ascii_binder -v 0.1.9
+  gem install ascii_binder -v 0.1.13
   echo "CICO: Ascii Binder Installed"
 }
 
@@ -233,7 +245,7 @@ function add_release_notes() {
   release_id=$(curl -s "https://api.github.com/repos/${REPO_OWNER}/minishift/releases" | jq --arg release "v$RELEASE_VERSION" -r ' .[] | if .name == $release then .id else empty end')
 
   if [[ "$release_id" != "" ]]; then
-    MILESTONE_ID=`curl -s https://api.github.com/repos/minishift/minishift/milestones?state=all  | jq --arg version "v$RELEASE_VERSION" -r ' .[] | if .title == $version then .number else empty end'`
+    MILESTONE_ID=`curl -s 'https://api.github.com/repos/minishift/minishift/milestones?state=all&page=1&per_page=100'  | jq --arg version "v$RELEASE_VERSION" -r ' .[] | if .title == $version then .number else empty end'`
 
     if [[ "$MILESTONE_ID" != "" ]]; then
       # Generate required json payload for release note
@@ -257,6 +269,7 @@ function setup_build_environment() {
   install_core_deps;
   install_kvm_virt;
   install_docker;
+  install_golang;
   prepare_for_proxy;
   runuser -l minishift_ci -c "/bin/bash centos_ci.sh"
 }
@@ -290,7 +303,9 @@ function perform_docs_publish() {
 
 function prepare_for_proxy() {
   export INTEGRATION_PROXY_CUSTOM_PORT=8181 # needs to be an unused port
+  export INTEGRATION_DEFAULT_SSHFS_PORT=2022
   firewall-cmd --zone=public --add-port=$INTEGRATION_PROXY_CUSTOM_PORT/tcp;
+  firewall-cmd --zone=public --add-port=$INTEGRATION_DEFAULT_SSHFS_PORT/tcp;
 }
 
 function perform_release() {
@@ -298,8 +313,10 @@ function perform_release() {
   make prerelease
   exit_on_failure "$?" "Pre-release tests failed."
 
-  MINISHIFT_VM_DRIVER=kvm make integration_all
-  exit_on_failure "$?" "Integration tests failed."
+  if [ "$SKIP_INTEGRATION_TEST" = false ]; then
+    MINISHIFT_VM_DRIVER=kvm make integration_pr
+    exit_on_failure "$?" "Integration tests failed."
+  fi
 
   make link_check_docs # Test docs builds and all links are valid
   exit_on_failure "$?" "Documentation build failed."
@@ -335,7 +352,7 @@ function perform_pr() {
 
 function perform_master() {
   make prerelease synopsis_docs link_check_docs
-  MINISHIFT_VM_DRIVER=kvm make integration_all
+  MINISHIFT_VM_DRIVER=kvm make integration_pr
   perform_docs_publish "minishift" "master" "minishift/docs/master";
   perform_artifacts_upload $1;
 }

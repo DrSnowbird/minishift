@@ -35,6 +35,14 @@ type DockerCommander interface {
 	// and exited. See also https://docs.docker.com/engine/api/v1.21/
 	Status(container string) (string, error)
 
+	// Pull the specified container image. Returns output in case the run was successful.
+	// Any occurring error is also returned.
+	Pull(image string) (string, error)
+
+	// Runs the specified container. Returns true in case the run was successful, false otherwise.
+	// Any occurring error is also returned.
+	Run(options string, container string) (bool, error)
+
 	// Starts the specified container. Returns true in case the start was successful, false otherwise.
 	// Any occurring error is also returned.
 	Start(container string) (bool, error)
@@ -47,13 +55,33 @@ type DockerCommander interface {
 	// Any occurring error is also returned.
 	Restart(container string) (bool, error)
 
-	// Cp copies a file from the Docker host to the specified destination in the specified container.
+	// Create creates the container with specified image. Returns output string in case the creation was successful.
+	// Any occurring error is also returned.
+	Create(options string, image string) (string, error)
+
+	// CpToContainer copies a file from the Docker host to the specified destination in the specified container.
+	// A successful copy will return nil. An error indicates that the copy failed.
+	CpToContainer(source string, container string, target string) error
+
+	// Cp copies a file from the specified destination in the specified container to the Docker host.
 	// A successful copy will return nil. An error indicates that the copy failed.
 	Cp(source string, container string, target string) error
+
+	// Rm removes a specified container from the Docker host.
+	// An error indicates that the remove failed.
+	Rm(container string) error
+
+	// GetID return the ID of the container for a given label which is present
+	// Any occurring error is also returned.
+	GetID(container string) (string, error)
 
 	// Exec runs 'docker exec' with the specified options, against the specified container, using the specified
 	// command and arguments. The output of the command is returned as well as any occurring error.
 	Exec(options string, container string, command string, args string) (string, error)
+
+	// IsImageExist provide a bool value if an image exist.
+	// Any occurring error is also returned.
+	IsImageExist(image string) (bool, error)
 
 	// LocalExec runs the specified command on the Docker host
 	LocalExec(cmd string) (string, error)
@@ -140,6 +168,13 @@ func (c VmDockerCommander) Restart(container string) (bool, error) {
 }
 
 func (c VmDockerCommander) Cp(source string, container string, target string) error {
+	cmd := fmt.Sprintf("docker cp %s:%s %s", container, source, target)
+	c.logCommand(cmd)
+	_, err := c.commander.SSHCommand(cmd)
+	return err
+}
+
+func (c VmDockerCommander) CpToContainer(source string, container string, target string) error {
 	cmd := fmt.Sprintf("docker cp %s %s:%s", source, container, target)
 	c.logCommand(cmd)
 	_, err := c.commander.SSHCommand(cmd)
@@ -168,4 +203,62 @@ func (c VmDockerCommander) Status(container string) (string, error) {
 
 func (c VmDockerCommander) logCommand(cmd string) {
 	glog.V(2).Info(fmt.Sprintf("Executing docker command: '%s'", cmd))
+}
+
+func (c VmDockerCommander) Run(options string, container string) (bool, error) {
+	cmd := fmt.Sprintf("docker run %s %s", options, container)
+	c.logCommand(cmd)
+	_, err := c.commander.SSHCommand(cmd)
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (c VmDockerCommander) Create(options string, image string) (string, error) {
+	cmd := fmt.Sprintf("docker create %s %s", options, image)
+	c.logCommand(cmd)
+	out, err := c.commander.SSHCommand(cmd)
+	if err != nil {
+		return "", err
+	}
+	return out, nil
+}
+
+func (c VmDockerCommander) Rm(container string) error {
+	cmd := fmt.Sprintf("docker rm %s", container)
+	c.logCommand(cmd)
+	_, err := c.commander.SSHCommand(cmd)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c VmDockerCommander) GetID(label string) (string, error) {
+	cmd := fmt.Sprintf(`docker ps -l -qf "label="%s""`, label)
+	c.logCommand(cmd)
+	out, err := c.commander.SSHCommand(cmd)
+	out = strings.TrimSpace(out)
+	return out, err
+}
+
+func (c VmDockerCommander) Pull(image string) (string, error) {
+	cmd := fmt.Sprintf("docker pull %s", image)
+	c.logCommand(cmd)
+	out, err := c.commander.SSHCommand(cmd)
+	out = strings.TrimSpace(out)
+	return out, err
+}
+
+func (c VmDockerCommander) IsImageExist(image string) (bool, error) {
+	cmd := fmt.Sprintf("docker images -q %s", image)
+	var exist bool
+	c.logCommand(cmd)
+	out, err := c.commander.SSHCommand(cmd)
+	out = strings.TrimSpace(out)
+	if out != "" {
+		exist = true
+	}
+	return exist, err
 }

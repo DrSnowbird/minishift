@@ -21,9 +21,15 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"os/exec"
+	"regexp"
+	"runtime"
 	"strconv"
+	"strings"
+	"time"
 
 	units "github.com/docker/go-units"
+	"github.com/minishift/minishift/pkg/util/filehelper"
 
 	"github.com/minishift/minishift/pkg/minikube/constants"
 	minishiftConstants "github.com/minishift/minishift/pkg/minishift/constants"
@@ -32,12 +38,24 @@ import (
 )
 
 func IsValidDriver(string, driver string) error {
+	if runtime.GOOS == "windows" {
+		cmd := exec.Command("wmic", "os", "get", "Caption", "/value")
+		stdOut, err := cmd.Output()
+		if err != nil {
+			return err
+		}
+		out := fmt.Sprintf("%s", stdOut)
+		if driver == "hyperv" && strings.Contains(out, "Windows 7") || strings.Contains(out, "Windows XP") {
+			return fmt.Errorf("Driver '%s' is not supported", driver)
+		}
+	}
+
 	for _, d := range constants.SupportedVMDrivers {
 		if driver == d {
 			return nil
 		}
 	}
-	return fmt.Errorf("Driver %s is not supported", driver)
+	return fmt.Errorf("Driver '%s' is not supported", driver)
 }
 
 func isValidHumanSize(size string) (bool, error) {
@@ -105,34 +123,76 @@ func IsValidPath(name string, path string) error {
 }
 
 func IsValidProxy(name string, uri string) error {
-	if err := util.ValidateProxyURL(uri); err != nil {
-		return fmt.Errorf("%s path is not valid: %v", name, err)
+	if err := util.ValidateProxyURL(uri, "http"); err != nil {
+		return fmt.Errorf("'%s' path is not valid: %v", name, err)
 	}
 	return nil
 }
 
-func IsValidUrl(_ string, isoURL string) error {
-	if isoURL == minishiftConstants.B2dIsoAlias || isoURL == minishiftConstants.CentOsIsoAlias {
+func IsValidISOUrl(_ string, isoURL string) error {
+	for _, isoAlias := range minishiftConstants.ValidIsoAliases {
+		if isoURL == isoAlias {
+			return nil
+		}
+	}
+	if !strings.HasSuffix(isoURL, ".iso") {
+		return fmt.Errorf("'%s' url is not valid", isoURL)
+	}
+
+	match, _ := regexp.MatchString(`^https?://`, isoURL)
+	if match {
+		_, err := url.ParseRequestURI(isoURL)
+		if err != nil {
+			return fmt.Errorf("'%s' url is not valid: %v", isoURL, err)
+		}
 		return nil
 	}
-	_, err := url.ParseRequestURI(isoURL)
-	if err != nil {
-		return fmt.Errorf("%s url is not valid: %v", isoURL, err)
+
+	if runtime.GOOS == "windows" {
+		match, _ := regexp.MatchString("^file://[a-zA-Z]:/.+", isoURL)
+		if !match {
+			return fmt.Errorf("'%s' url is not valid", isoURL)
+		}
+		if !filehelper.Exists(strings.Replace(strings.TrimPrefix(isoURL, "file://"), "/", "\\", -1)) {
+			return fmt.Errorf("'%s' file is not present", isoURL)
+		}
+	} else {
+		match, _ := regexp.MatchString("^file:///.+", isoURL)
+		if !match {
+			return fmt.Errorf("'%s' url is not valid", isoURL)
+		}
+		if !filehelper.Exists(strings.TrimPrefix(isoURL, "file://")) {
+			return fmt.Errorf("'%s' file is not present", isoURL)
+		}
 	}
+
+	return nil
+}
+
+func IsValidIPv4AddressSlice(name string, addressSlice string) error {
+	addresses := strings.Split(addressSlice, ",")
+
+	for _, address := range addresses {
+		err := IsValidIPv4Address(name, address)
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
 func IsValidIPv4Address(name string, address string) error {
 	ip := net.ParseIP(address).To4()
 	if ip == nil {
-		return fmt.Errorf("%s IPv4 address is not valid: %s", name, address)
+		return fmt.Errorf("%s IPv4 address is not valid: '%s'", name, address)
 	}
 
 	return nil
 }
 
 func IsValidNetmask(name string, mask string) error {
-	err := fmt.Errorf("%s netmask is not valid: %s", name, mask)
+	err := fmt.Errorf("%s netmask is not valid: '%s'", name, mask)
 
 	if stringUtils.HasOnlyNumbers(mask) {
 		prefixSize, _ := strconv.Atoi(mask)
@@ -153,4 +213,47 @@ func IsValidNetmask(name string, mask string) error {
 	}
 
 	return nil
+}
+
+func IsValidPort(name string, p string) error {
+	port, err := strconv.Atoi(p)
+	if err != nil {
+		return fmt.Errorf("%s:%v", name, err)
+	}
+	if numInRange(port, 1024, 65536) && isPortAccessible(port) {
+		return nil
+	}
+	return fmt.Errorf("Port %d is inaccessible please use a port in the range (1024-65536)", port)
+}
+
+func IsSystemTrayAvailable(_ string, _ string) error {
+	if runtime.GOOS == "linux" {
+		return fmt.Errorf("System tray is not available in linux.")
+	}
+	return nil
+}
+
+func IsValidTimezone(_ string, timezone string) error {
+	_, err := time.LoadLocation(timezone)
+	if err != nil {
+		return fmt.Errorf("%s is not a vaild timezone: %s", timezone, err.Error())
+	}
+	return nil
+}
+
+func numInRange(num int, start int, end int) bool {
+	if num >= start && num <= end {
+		return true
+	}
+	return false
+}
+
+func isPortAccessible(port int) bool {
+	hostWithPort := fmt.Sprintf(":%d", port)
+	listener, err := net.Listen("tcp", hostWithPort)
+	if err != nil {
+		return false
+	}
+	listener.Close()
+	return true
 }

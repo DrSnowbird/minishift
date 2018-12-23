@@ -1,4 +1,4 @@
-@cmd-image @command
+@cmd-image @core
 Feature: Basic image caching test
   As a user I am able to import and export container images from a local OCI repository
   located in the $MINISHIFT_HOME/cache directory
@@ -13,8 +13,11 @@ Feature: Basic image caching test
      """
      Running this command requires an existing 'minishift' VM, but no VM is defined.
      """
-
      When executing "minishift start" succeeds
+      And image export completes with 3 images within "20m"
+      And container image "openshift\/origin-haproxy-router:v[0-9]+\.[0-9]+\.[0-9]+" is cached
+      And container image "openshift\/origin-docker-registry:v[0-9]+\.[0-9]+\.[0-9]+" is cached
+      And container image "openshift\/origin-control-plane:v[0-9]+\.[0-9]+\.[0-9]+" is cached
       And executing "minishift image export alpine:latest" succeeds
      Then stdout of command "minishift image list" contains "alpine:latest"
 
@@ -22,7 +25,8 @@ Feature: Basic image caching test
      When executing "minishift delete --force" succeeds
      Then stdout of command "minishift image list" contains "alpine:latest"
 
-  Scenario: As a user I can import a container image from the local cache into a running Minishift instance
+  Scenario: As a user I can reuse the cached images on next start and also import a container image from the local
+    cache into a running Minishift instance.
     Note: In this scenario we use alpine:latest which was cached in the previous scenario
 
     Given Minishift has state "Does Not Exist"
@@ -36,12 +40,15 @@ Feature: Basic image caching test
      """
 
      When executing "minishift start" succeeds
-      And executing "minishift image list --vm" succeeds
-      And stdout should not contain "alpine:latest"
+     Then stdout should match "Importing 'openshift\/origin-control-plane:v[0-9]+\.[0-9]+\.[0-9]+' [\.]+ OK"
+      And stdout should match "Importing 'openshift\/origin-docker-registry:v[0-9]+\.[0-9]+\.[0-9]+' [\.]+ OK"
+      And stdout should match "Importing 'openshift\/origin-haproxy-router:v[0-9]+\.[0-9]+\.[0-9]+' [\.]+ OK"
+
+     When executing "minishift image list --vm" succeeds
+     Then stdout should not contain "alpine:latest"
       And executing "minishift image import alpine:latest" succeeds
       And executing "minishift image list --vm" succeeds
      Then stdout should contain "alpine:latest"
-
      When executing "minishift delete --force" succeeds
      Then Minishift should have state "Does Not Exist"
 
@@ -53,9 +60,9 @@ Feature: Basic image caching test
     Given Minishift has state "Does Not Exist"
       And executing "minishift config set image-caching true" succeeds
       And executing "minishift image cache-config add alpine:latest" succeeds
-     Then JSON config file "config/config.json" contains key "image-caching" with value matching "true"
+     Then JSON config file ".minishift/config/config.json" contains key "image-caching" with value matching "true"
       And stdout of command "minishift config get image-caching" is equal to "true"
-      And JSON config file "config/config.json" contains key "cache-images" with value matching "[alpine:latest]"
+      And JSON config file ".minishift/config/config.json" contains key "cache-images" with value matching "[alpine:latest]"
 
      When executing "minishift start" succeeds
      Then stdout of command "minishift image list --vm" contains "alpine:latest"
@@ -70,12 +77,12 @@ Feature: Basic image caching test
 
      When executing "minishift image export foo:latest"
      Then exitcode should equal "1"
-      And stderr should contain "Error: image library/foo:latest not found"
+      And stderr should contain "Container image export failed"
 
      When executing "minishift image import foo:latest alpine:latest"
      Then exitcode should equal "1"
-      And stdout should match "Importing foo:latest.*CACHE MISS"
-      And stdout should match "Importing alpine:latest.*OK"
+      And stdout should match "Importing 'foo:latest'.*CACHE MISS"
+      And stdout should match "Importing 'alpine:latest'.*OK"
 
      When executing "minishift image import foo:latest:"
      Then exitcode should equal "1"
@@ -87,10 +94,10 @@ Feature: Basic image caching test
 
      When executing "minishift image export foo:latest alpine:latest"
      Then exitcode should equal "1"
-      And stdout should match "Exporting foo:latest.*FAIL"
-      And stdout should match "Exporting alpine:latest.*OK"
+      And stdout should match "Exporting 'foo:latest'.*FAIL"
+      And stdout should match "Exporting 'alpine:latest'.*OK"
 
-     When executing "minishift delete --force --clear-cache" succeeds
+     When executing "minishift delete --force" succeeds
      Then Minishift should have state "Does Not Exist"
 
   Scenario: As a user I can view, remove and add the image cache configuration
@@ -108,3 +115,17 @@ Feature: Basic image caching test
      When executing "minishift image cache-config remove busybox:latest" succeeds
       And executing "minishift image cache-config view" succeeds
      Then stdout should be empty
+
+  Scenario: As a user I can prune/delete an image from local cache.
+  Note: alpine:latest is already added to the local cache.
+
+    Given Minishift has state "Does Not Exist"
+      And executing "minishift image prune alpine:latest" succeeds
+     Then stdout should contain "OK"
+      And executing "minishift image list" succeeds
+     Then stdout should not contain "alpine:latest"
+      And executing "minishift image prune --all" succeeds
+     Then stdout should contain "OK"
+      And executing "minishift image list" succeeds
+     Then stdout should be empty
+      And executing "minishift delete --force --clear-cache" succeeds

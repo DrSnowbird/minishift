@@ -18,6 +18,9 @@ package image
 
 import (
 	"fmt"
+	"os"
+	"sort"
+
 	"github.com/containers/image/docker/reference"
 	"github.com/docker/machine/libmachine"
 	"github.com/minishift/minishift/cmd/minishift/cmd/config"
@@ -25,12 +28,11 @@ import (
 	"github.com/minishift/minishift/cmd/minishift/state"
 	"github.com/minishift/minishift/pkg/minikube/cluster"
 	"github.com/minishift/minishift/pkg/minikube/constants"
+	viperConfig "github.com/minishift/minishift/pkg/minishift/config"
 	"github.com/minishift/minishift/pkg/minishift/docker/image"
 	pkgUtil "github.com/minishift/minishift/pkg/util"
 	"github.com/minishift/minishift/pkg/util/os/atexit"
 	"github.com/pkg/errors"
-	"os"
-	"sort"
 )
 
 func getCachedImages(cacheDir string) []string {
@@ -128,7 +130,7 @@ func toStringSlice(interfaceSlice []interface{}) []string {
 	return slice
 }
 
-func getConfiguredCachedImages(minishiftConfig config.MinishiftConfig) []string {
+func GetConfiguredCachedImages(minishiftConfig viperConfig.ViperConfig) []string {
 	var cacheImages []string
 	if minishiftConfig[config.CacheImages.Name] == nil {
 		cacheImages = []string{}
@@ -138,10 +140,9 @@ func getConfiguredCachedImages(minishiftConfig config.MinishiftConfig) []string 
 	return cacheImages
 }
 
-func getMinishiftConfig() config.MinishiftConfig {
-	minishiftConfig, err := config.ReadConfig()
-	if err != nil {
-		atexit.ExitWithMessage(1, fmt.Sprintf("Cannot read the Minishift configuration: %s", err.Error()))
+func deleteCachedImages(cacheDir string) error {
+	if err := os.RemoveAll(cacheDir); err != nil {
+		return err
 	}
-	return minishiftConfig
+	return nil
 }

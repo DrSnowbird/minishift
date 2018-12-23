@@ -25,14 +25,16 @@ import (
 
 	"strings"
 
-	minikubeConstants "github.com/minishift/minishift/pkg/minikube/constants"
+	"github.com/blang/semver"
+	"github.com/minishift/minishift/pkg/minikube/constants"
 	"github.com/minishift/minishift/pkg/minishift/addon"
 	"github.com/minishift/minishift/pkg/minishift/addon/command"
+	"github.com/minishift/minishift/pkg/minishift/addon/config"
 	"github.com/minishift/minishift/pkg/minishift/addon/parser"
-	"github.com/minishift/minishift/pkg/minishift/constants"
-	"github.com/minishift/minishift/pkg/util"
+	instanceState "github.com/minishift/minishift/pkg/minishift/config"
 	"github.com/minishift/minishift/pkg/util/filehelper"
 	utilStrings "github.com/minishift/minishift/pkg/util/strings"
+	"github.com/minishift/minishift/pkg/version"
 	"github.com/pkg/errors"
 )
 
@@ -46,14 +48,14 @@ type AddOnManager struct {
 }
 
 // NewAddOnManager creates a new addon manager for the specified addon directory.
-func NewAddOnManager(baseDir string, configMap map[string]*addon.AddOnConfig) (*AddOnManager, error) {
+func NewAddOnManager(baseDir string, configMap map[string]*config.AddOnConfig) (*AddOnManager, error) {
 	if !filehelper.IsDirectory(baseDir) {
-		return nil, errors.New(fmt.Sprintf("Unable to create addon manager for non existing directory %s", baseDir))
+		return nil, errors.New(fmt.Sprintf("Unable to create addon manager for non existing directory '%s'", baseDir))
 	}
 
 	files, err := ioutil.ReadDir(baseDir)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Unable to create addon manager for non existing directory %s. ", baseDir)
+		return nil, errors.Wrapf(err, "Unable to create addon manager for non existing directory '%s'. ", baseDir)
 	}
 
 	detectedAddOns := make(map[string]addon.AddOn)
@@ -72,7 +74,7 @@ func NewAddOnManager(baseDir string, configMap map[string]*addon.AddOnConfig) (*
 				fmt.Println(fmt.Sprintf("Skipping addon '%s' in '%s' due to parse error: %s", f.Name(), fullPath, err.Error()))
 				continue
 			} else {
-				return nil, errors.Wrapf(err, "Unable to create addon manager for %s. ", baseDir)
+				return nil, errors.Wrapf(err, "Unable to create addon manager for '%s'. ", baseDir)
 			}
 		}
 		setStateAndPriority(addOn, configMap)
@@ -126,23 +128,23 @@ func (m *AddOnManager) Get(name string) addon.AddOn {
 
 // Enable enables the addon specified via addonName to be run during startup. The priority determines when the addon is run in relation
 // the other addons.
-func (m *AddOnManager) Enable(addonName string, priority int) (*addon.AddOnConfig, error) {
+func (m *AddOnManager) Enable(addonName string, priority int) (*config.AddOnConfig, error) {
 	addOn := m.addOns[addonName]
 	if addOn == nil {
-		return nil, errors.New(fmt.Sprintf("Unable to find addon %s in addon directory %s", addonName, m.baseDir))
+		return nil, errors.New(fmt.Sprintf("Unable to find addon '%s' in addon directory '%s'", addonName, m.baseDir))
 	}
 
 	addOn.SetEnabled(true)
 	addOn.SetPriority(priority)
 
-	return &addon.AddOnConfig{addonName, true, float64(priority)}, nil
+	return &config.AddOnConfig{addonName, true, float64(priority)}, nil
 }
 
 // UnInstall uninstalls the addon specified via addonName.
 func (m *AddOnManager) UnInstall(addonName string) error {
 	addOn := m.addOns[addonName]
 	if addOn == nil {
-		return errors.New(fmt.Sprintf("Unable to find addon %s in addon directory %s", addonName, m.baseDir))
+		return errors.New(fmt.Sprintf("Unable to find addon '%s' in addon directory '%s'", addonName, m.baseDir))
 	}
 
 	targetPath := filepath.Join(m.baseDir, addonName)
@@ -152,19 +154,19 @@ func (m *AddOnManager) UnInstall(addonName string) error {
 		}
 		return nil
 	}
-	return errors.New(fmt.Sprintf("Unable to find addon directory %s", targetPath))
+	return errors.New(fmt.Sprintf("Unable to find addon directory '%s'", targetPath))
 }
 
 // Disable disables the addon with the specified name.
-func (m *AddOnManager) Disable(addonName string) (*addon.AddOnConfig, error) {
+func (m *AddOnManager) Disable(addonName string) (*config.AddOnConfig, error) {
 	addOn := m.addOns[addonName]
 	if addOn == nil {
-		return nil, errors.New(fmt.Sprintf("Unable to find addon %s in addon directory %s", addonName, m.baseDir))
+		return nil, errors.New(fmt.Sprintf("Unable to find addon '%s' in addon directory '%s'", addonName, m.baseDir))
 	}
 
 	addOn.SetEnabled(false)
 
-	return &addon.AddOnConfig{addonName, false, float64(addOn.GetPriority())}, nil
+	return &config.AddOnConfig{addonName, false, float64(addOn.GetPriority())}, nil
 }
 
 // Apply executes all enabled addons.
@@ -197,20 +199,21 @@ func (m *AddOnManager) ApplyAddOn(addOn addon.AddOn, context *command.ExecutionC
 	context.AddToContext("addon-name", addOn.MetaData().Name())
 	defer context.RemoveFromContext("addon-name")
 
-	err := m.verifyRequiredOpenshiftVersion(context, addOn.MetaData())
-	if err != nil {
+	if err := addVarDefaultsToContext(addOn, context); err != nil {
 		return err
 	}
 
-	varDefaults, err := addOn.MetaData().VarDefaults()
-	if err != nil {
+	addonMetadata := addOn.MetaData()
+	if err := verifyRequiredOpenshiftVersion(addonMetadata); err != nil {
 		return err
 	}
-	if err := addVarDefaultsToContext(context, varDefaults); err != nil {
+	if err := verifyRequiredMinishiftVersion(addonMetadata); err != nil {
 		return err
 	}
-
-	if err := m.verifyRequiredVariablesInContext(context, addOn.MetaData()); err != nil {
+	if err := verifyRequiredVariablesInContext(context, addonMetadata); err != nil {
+		return err
+	}
+	if err := m.verifyRequiredAddons(addonMetadata); err != nil {
 		return err
 	}
 
@@ -221,13 +224,11 @@ func (m *AddOnManager) ApplyAddOn(addOn addon.AddOn, context *command.ExecutionC
 	defer os.Chdir(oldDir)
 
 	os.Chdir(addOn.InstallPath())
-	for _, c := range addOn.Commands() {
-		err := c.Execute(context)
-		if err != nil {
-			return err
-		}
+	if err := addonCmdExecution(addOn.Commands(), context); err != nil {
+		return err
 	}
-	fmt.Print("\n\n")
+
+	fmt.Print("\n")
 	return nil
 }
 
@@ -236,13 +237,18 @@ func (m *AddOnManager) RemoveAddOn(addOn addon.AddOn, context *command.Execution
 	context.AddToContext("addon-name", addOn.MetaData().Name())
 	defer context.RemoveFromContext("addon-name")
 
-	err := m.verifyRequiredOpenshiftVersion(context, addOn.MetaData())
-	if err != nil {
+	if err := addVarDefaultsToContext(addOn, context); err != nil {
 		return err
 	}
 
-	err = m.verifyRequiredVariablesInContext(context, addOn.MetaData())
-	if err != nil {
+	addonMetadata := addOn.MetaDataForAddonRemove()
+	if err := verifyRequiredOpenshiftVersion(addonMetadata); err != nil {
+		return err
+	}
+	if err := verifyRequiredMinishiftVersion(addonMetadata); err != nil {
+		return err
+	}
+	if err := verifyRequiredVariablesInContext(context, addonMetadata); err != nil {
 		return err
 	}
 
@@ -253,13 +259,10 @@ func (m *AddOnManager) RemoveAddOn(addOn addon.AddOn, context *command.Execution
 	defer os.Chdir(oldDir)
 
 	os.Chdir(addOn.InstallPath())
-	for _, c := range addOn.RemoveCommands() {
-		err := c.Execute(context)
-		if err != nil {
-			return err
-		}
+	if err := addonCmdExecution(addOn.RemoveCommands(), context); err != nil {
+		return err
 	}
-	fmt.Print("\n\n")
+	fmt.Print("\n")
 	return nil
 }
 
@@ -273,7 +276,7 @@ func (m *AddOnManager) mapToSlice() []addon.AddOn {
 	return addOnSlice
 }
 
-func (m *AddOnManager) verifyRequiredVariablesInContext(context *command.ExecutionContext, meta addon.AddOnMeta) error {
+func verifyRequiredVariablesInContext(context *command.ExecutionContext, meta addon.AddOnMeta) error {
 	missingVars := []string{}
 
 	check := make(map[string]bool)
@@ -293,41 +296,58 @@ func (m *AddOnManager) verifyRequiredVariablesInContext(context *command.Executi
 
 	if len(missingVars) > 0 {
 		missing := strings.TrimSpace(strings.Join(missingVars, ", "))
-		return fmt.Errorf("The variable(s) %s are required by the add-on, but are not defined in the context", missing)
+		return fmt.Errorf("The variable(s) '%s' are required by the add-on, but are not defined in the context", missing)
 	}
 
 	return nil
 }
 
-func (m *AddOnManager) verifyRequiredOpenshiftVersion(context *command.ExecutionContext, meta addon.AddOnMeta) error {
-	dockerCommander := context.GetDockerCommander()
-	versionInfo, err := dockerCommander.Exec(" ", constants.OpenshiftContainerName, "openshift", "version")
-	if err != nil {
-		return err
-	}
-
-	// verionInfo variable have below string as value along with new line
-	// openshift v3.6.0+c4dd4cf
-	// kubernetes v1.6.1+5115d708d7
-	// etcd 3.2.1
-	// openShiftVersionAlongWithCommitSha is contain *v3.6.0+c4dd4cf* (first split on new line and second on space)
-	openShiftVersionAlongWithCommitSha := strings.Split(strings.Split(versionInfo, "\n")[0], " ")[1]
-	// openshiftVersion is contain *3.6.0* (split on *+* string and then trim the *v* as perfix)
-	// TrimSpace is there to make sure no whitespace around version string
-	openShiftVersion := strings.TrimSpace(strings.TrimPrefix(strings.Split(openShiftVersionAlongWithCommitSha, "+")[0], minikubeConstants.VersionPrefix))
+func verifyRequiredOpenshiftVersion(meta addon.AddOnMeta) error {
+	openShiftVersion := strings.TrimPrefix(instanceState.InstanceStateConfig.OpenshiftVersion, constants.VersionPrefix)
 	requiredOpenshiftVersions := strings.TrimSpace(meta.OpenShiftVersion())
 	if requiredOpenshiftVersions != "" {
 		for _, requiredOpenshiftVersion := range strings.Split(requiredOpenshiftVersions, versionRangeSeparator) {
-			if err = compareOpenshiftVersions(openShiftVersion, strings.TrimSpace(requiredOpenshiftVersion)); err != nil {
+			if err := compareComponentVersions(openShiftVersion, strings.TrimSpace(requiredOpenshiftVersion), "OpenShift", meta.OpenShiftVersion()); err != nil {
 				return err
 			}
 		}
+	}
 
+	return nil
+}
+
+func verifyRequiredMinishiftVersion(meta addon.AddOnMeta) error {
+	minishiftVersionWithHash := strings.TrimPrefix(version.GetMinishiftVersion(), constants.VersionPrefix)
+	minishiftVersion := strings.Split(minishiftVersionWithHash, "+")[0]
+	requiredMinishiftVersions := strings.TrimSpace(meta.MinishiftVersion())
+	if requiredMinishiftVersions != "" {
+		for _, requiredMinishiftVersion := range strings.Split(requiredMinishiftVersions, versionRangeSeparator) {
+			if err := compareComponentVersions(minishiftVersion, strings.TrimSpace(requiredMinishiftVersion), "Minishift", meta.MinishiftVersion()); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
 
-func setStateAndPriority(addOn addon.AddOn, configMap map[string]*addon.AddOnConfig) {
+func (m *AddOnManager) verifyRequiredAddons(metadata addon.AddOnMeta) error {
+	var depsNotInstalled []string
+	dependencies, err := metadata.Dependency()
+	if err == nil && len(dependencies) > 0 {
+		for _, dep := range dependencies {
+			if m.IsInstalled(dep) {
+				continue
+			}
+			depsNotInstalled = append(depsNotInstalled, dep)
+		}
+		if len(depsNotInstalled) != 0 {
+			return errors.New(fmt.Sprintf("Dependent add-ons [%s] not found for this instance. Please install and apply them before running this add-on.", strings.Join(depsNotInstalled, ", ")))
+		}
+	}
+	return err
+}
+
+func setStateAndPriority(addOn addon.AddOn, configMap map[string]*config.AddOnConfig) {
 	addOnConfig := configMap[addOn.MetaData().Name()]
 	if addOnConfig == nil {
 		return
@@ -336,49 +356,95 @@ func setStateAndPriority(addOn addon.AddOn, configMap map[string]*addon.AddOnCon
 	addOn.SetPriority(int(addOnConfig.Priority))
 }
 
-func compareOpenshiftVersions(openShiftVersion, requiredOpenshiftVersion string) error {
-	if strings.HasPrefix(requiredOpenshiftVersion, ">=") {
-		// This will work for both upstream and downstream.
-		if util.VersionOrdinal(openShiftVersion) < util.VersionOrdinal(strings.TrimPrefix(requiredOpenshiftVersion, ">=")) {
-			return fmt.Errorf("\nAdd-on does not support OpenShift version %s. "+
-				"You need to use a version %s", openShiftVersion, requiredOpenshiftVersion)
+func compareComponentVersions(currentVersion, requiredVersion string, componentName string, versionRange string) error {
+	if strings.HasPrefix(requiredVersion, ">=") {
+		currentVersion, err := semver.Make(currentVersion)
+		if err != nil {
+			return err
 		}
-		return nil
-	}
-	if strings.HasPrefix(requiredOpenshiftVersion, ">") {
-		if util.VersionOrdinal(openShiftVersion) <= util.VersionOrdinal(strings.TrimPrefix(requiredOpenshiftVersion, ">")) {
-			return fmt.Errorf("\nAdd-on does not support OpenShift version %s. "+
-				"You need to use a version %s", openShiftVersion, requiredOpenshiftVersion)
+		requiredVersion, err := semver.Make(strings.TrimPrefix(requiredVersion, ">="))
+		if err != nil {
+			return err
 		}
-		return nil
-	}
-	if strings.HasPrefix(requiredOpenshiftVersion, "<=") {
-		if util.VersionOrdinal(openShiftVersion) > util.VersionOrdinal(strings.TrimPrefix(requiredOpenshiftVersion, "<=")) {
-			return fmt.Errorf("\nAdd-on does not support OpenShift version %s. "+
-				"You need to use a version %s", openShiftVersion, requiredOpenshiftVersion)
+		if currentVersion.GE(requiredVersion) != true {
+			return fmt.Errorf("\nAdd-on does not support %s version %s. "+
+				"You need to use a version %s", componentName, currentVersion, versionRange)
 		}
-		return nil
+		return err
 	}
-	if strings.HasPrefix(requiredOpenshiftVersion, "<") {
-		if util.VersionOrdinal(openShiftVersion) >= util.VersionOrdinal(strings.TrimPrefix(requiredOpenshiftVersion, "<")) {
-			return fmt.Errorf("\nAdd-on does not support OpenShift version %s. "+
-				"You need to use a version %s", openShiftVersion, requiredOpenshiftVersion)
+	if strings.HasPrefix(requiredVersion, ">") {
+		currentVersion, err := semver.Make(currentVersion)
+		if err != nil {
+			return err
 		}
-		return nil
+		requiredVersion, err := semver.Make(strings.TrimPrefix(requiredVersion, ">"))
+		if err != nil {
+			return err
+		}
+		if currentVersion.GT(requiredVersion) != true {
+			return fmt.Errorf("\nAdd-on does not support %s version %s. "+
+				"You need to use a version %s", componentName, currentVersion, versionRange)
+		}
+		return err
 	}
-	if openShiftVersion != requiredOpenshiftVersion {
-		return fmt.Errorf("\nAddon does not support OpenShift version %s. "+
-			"You need to use a version %s", openShiftVersion, requiredOpenshiftVersion)
+	if strings.HasPrefix(requiredVersion, "<=") {
+		currentVersion, err := semver.Make(currentVersion)
+		if err != nil {
+			return err
+		}
+		requiredVersion, err := semver.Make(strings.TrimPrefix(requiredVersion, "<="))
+		if err != nil {
+			return err
+		}
+		if currentVersion.LE(requiredVersion) != true {
+			return fmt.Errorf("\nAdd-on does not support %s version %s. "+
+				"You need to use a version %s", componentName, currentVersion, versionRange)
+		}
+		return err
+	}
+	if strings.HasPrefix(requiredVersion, "<") {
+		currentVersion, err := semver.Make(currentVersion)
+		if err != nil {
+			return err
+		}
+		requiredVersion, err := semver.Make(strings.TrimPrefix(requiredVersion, "<"))
+		if err != nil {
+			return err
+		}
+		if currentVersion.LT(requiredVersion) != true {
+			return fmt.Errorf("\nAdd-on does not support %s version %s. "+
+				"You need to use a version %s", componentName, currentVersion, versionRange)
+		}
+		return err
+	}
+	if currentVersion != requiredVersion {
+		return fmt.Errorf("\nAddon does not support %s version %s. "+
+			"You need to use a version %s", componentName, currentVersion, requiredVersion)
 	}
 
 	return nil
 }
 
-func addVarDefaultsToContext(context *command.ExecutionContext, varDefaults []addon.RequiredVar) error {
+func addVarDefaultsToContext(addOn addon.AddOn, context *command.ExecutionContext) error {
+	varDefaults, err := addOn.MetaData().VarDefaults()
+	if err != nil {
+		return err
+	}
+
 	for _, varDefault := range varDefaults {
 		// Don't add context if env already present
 		if !utilStrings.Contains(context.Vars(), varDefault.Key) {
 			context.AddToContext(varDefault.Key, varDefault.Value)
+		}
+	}
+
+	return nil
+}
+
+func addonCmdExecution(commands []command.Command, context *command.ExecutionContext) error {
+	for _, c := range commands {
+		if err := c.Execute(context); err != nil {
+			return err
 		}
 	}
 

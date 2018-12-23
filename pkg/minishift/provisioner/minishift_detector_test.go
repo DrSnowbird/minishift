@@ -17,11 +17,12 @@ limitations under the License.
 package provisioner
 
 import (
+	"testing"
+
 	"github.com/docker/machine/libmachine/drivers"
 	"github.com/docker/machine/libmachine/provision"
 	"github.com/minishift/minishift/pkg/minikube/tests"
-	"reflect"
-	"testing"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestMinishiftProvisionerSelected(t *testing.T) {
@@ -47,9 +48,7 @@ VARIANT="minishift"
 VARIANT_VERSION="1.0.0-alpha.1"
 `
 	port, err := s.Start()
-	if err != nil {
-		t.Fatalf("Error starting ssh server: %s", err)
-	}
+	assert.NoError(t, err, "Error starting ssh server")
 	d := &tests.MockDriver{
 		Port: port,
 		BaseDriver: drivers.BaseDriver{
@@ -60,19 +59,12 @@ VARIANT_VERSION="1.0.0-alpha.1"
 
 	detector := MinishiftProvisionerDetector{Delegate: provision.StandardDetector{}}
 	provisioner, err := detector.DetectProvisioner(d)
-	if err != nil {
-		t.Fatalf("Error Getting detector: %s", err)
-	}
 
-	expectedProvisioner := "*provisioner.MinishiftProvisioner"
-	if reflect.TypeOf(provisioner).String() != expectedProvisioner {
-		t.Fatalf("Unexpected provisioner type. Expected '%s' but got '%s'", expectedProvisioner, reflect.TypeOf(provisioner).String())
-	}
+	assert.NoError(t, err, "Error Getting detector")
+	assert.IsType(t, new(MinishiftProvisioner), provisioner)
 
 	osRelease, _ := provisioner.GetOsReleaseInfo()
-	if osRelease.Variant != "minishift" {
-		t.Fatal("Release info must contain 'minishift' variant")
-	}
+	assert.Equal(t, "minishift", osRelease.Variant, "Release info must contain 'minishift' variant")
 
 }
 
@@ -96,9 +88,7 @@ REDHAT_SUPPORT_PRODUCT="centos"
 REDHAT_SUPPORT_PRODUCT_VERSION="7"
 `
 	port, err := s.Start()
-	if err != nil {
-		t.Fatalf("Error starting ssh server: %s", err)
-	}
+	assert.NoError(t, err, "Error starting ssh server")
 	d := &tests.MockDriver{
 		Port: port,
 		BaseDriver: drivers.BaseDriver{
@@ -109,17 +99,84 @@ REDHAT_SUPPORT_PRODUCT_VERSION="7"
 
 	detector := MinishiftProvisionerDetector{Delegate: provision.StandardDetector{}}
 	provisioner, err := detector.DetectProvisioner(d)
-	if err != nil {
-		t.Fatalf("Error Getting detector: %s", err)
-	}
+	assert.NoError(t, err, "Error Getting detector")
 
-	expectedProvisioner := "*provision.CentosProvisioner"
-	if reflect.TypeOf(provisioner).String() != expectedProvisioner {
-		t.Fatalf("Unexpected provisioner type. Expected '%s' but got '%s'", expectedProvisioner, reflect.TypeOf(provisioner).String())
-	}
+	assert.IsType(t, new(MinishiftProvisioner), provisioner)
 
 	osRelease, _ := provisioner.GetOsReleaseInfo()
-	if osRelease.Variant == "minishift" {
-		t.Fatal("Release info should not contain 'minishift' variant")
+	assert.NotEqual(t, "minishift", osRelease.Variant, "Release info should not contain 'minishift' variant")
+}
+
+func TestDefaultRHELOSProvisionerSelected(t *testing.T) {
+	s, _ := tests.NewSSHServer()
+	s.CommandToOutput = make(map[string]string)
+	s.CommandToOutput["cat /etc/os-release"] = `NAME="Red Hat Enterprise Linux Server"
+VERSION="7.5 (Maipo)"
+ID="rhel"
+ID_LIKE="fedora"
+VARIANT="Server"
+VARIANT_ID="server"
+VERSION_ID="7.5"
+PRETTY_NAME="Red Hat Enterprise Linux Server 7.5 (Maipo)"
+ANSI_COLOR="0;31"
+CPE_NAME="cpe:/o:redhat:enterprise_linux:7.5:GA:server"
+HOME_URL="https://www.redhat.com/"
+BUG_REPORT_URL="https://bugzilla.redhat.com/"
+
+REDHAT_BUGZILLA_PRODUCT="Red Hat Enterprise Linux 7"
+REDHAT_BUGZILLA_PRODUCT_VERSION=7.5
+REDHAT_SUPPORT_PRODUCT="Red Hat Enterprise Linux"
+REDHAT_SUPPORT_PRODUCT_VERSION="7.5"
+`
+	port, err := s.Start()
+	assert.NoError(t, err, "Error starting ssh server")
+	d := &tests.MockDriver{
+		Port: port,
+		BaseDriver: drivers.BaseDriver{
+			IPAddress:  "127.0.0.1",
+			SSHKeyPath: "",
+		},
 	}
+
+	detector := MinishiftProvisionerDetector{Delegate: provision.StandardDetector{}}
+	provisioner, err := detector.DetectProvisioner(d)
+	assert.NoError(t, err, "Error Getting detector")
+
+	assert.IsType(t, new(MinishiftProvisioner), provisioner)
+
+	osRelease, _ := provisioner.GetOsReleaseInfo()
+	assert.NotEqual(t, "minishift", osRelease.Variant, "Release info should not contain 'minishift' variant")
+}
+
+func TestDefaultUbuntuProvisionerSelected(t *testing.T) {
+	s, _ := tests.NewSSHServer()
+	s.CommandToOutput = make(map[string]string)
+	s.CommandToOutput["cat /etc/os-release"] = `NAME="Ubuntu"
+VERSION="13.10, Saucy Salamander"
+ID=ubuntu
+ID_LIKE=debian
+PRETTY_NAME="Ubuntu 13.10"
+VERSION_ID="13.10"
+HOME_URL="http://www.ubuntu.com/"
+SUPPORT_URL="http://help.ubuntu.com/"
+BUG_REPORT_URL="http://bugs.launchpad.net/ubuntu/"
+`
+	port, err := s.Start()
+	assert.NoError(t, err, "Error starting ssh server")
+	d := &tests.MockDriver{
+		Port: port,
+		BaseDriver: drivers.BaseDriver{
+			IPAddress:  "127.0.0.1",
+			SSHKeyPath: "",
+		},
+	}
+
+	detector := MinishiftProvisionerDetector{Delegate: provision.StandardDetector{}}
+	provisioner, err := detector.DetectProvisioner(d)
+	assert.NoError(t, err, "Error Getting detector")
+
+	assert.IsType(t, new(provision.UbuntuProvisioner), provisioner)
+
+	osRelease, _ := provisioner.GetOsReleaseInfo()
+	assert.NotEqual(t, "minishift", osRelease.Variant, "Release info should not contain 'minishift' variant")
 }

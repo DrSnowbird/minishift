@@ -21,6 +21,7 @@ import (
 	"fmt"
 	minishiftStrings "github.com/minishift/minishift/pkg/util/strings"
 	"regexp"
+	"strings"
 )
 
 var requiredMetaTags = []string{NameMetaTagName, DescriptionMetaTagName}
@@ -30,8 +31,11 @@ const (
 	NameMetaTagName          = "Name"
 	DescriptionMetaTagName   = "Description"
 	RequiredOpenShiftVersion = "OpenShift-Version"
+	RequiredMinishiftVersion = "Minishift-Version"
 	anyOpenShiftVersion      = ""
+	anyMinishiftVersion      = ""
 	varDefaults              = "Var-Defaults"
+	dependsOn                = "Depends-On"
 )
 
 type RequiredVar struct {
@@ -47,6 +51,9 @@ type AddOnMeta interface {
 	VarDefaults() ([]RequiredVar, error)
 	GetValue(key string) string
 	OpenShiftVersion() string
+	MinishiftVersion() string
+	Dependency() ([]string, error)
+	Url() string
 }
 
 type DefaultAddOnMeta struct {
@@ -60,8 +67,14 @@ func NewAddOnMeta(headers map[string]interface{}) (AddOnMeta, error) {
 	if err := requiredOpenShiftVersionCheck(headers); err != nil {
 		return nil, err
 	}
+	if err := requiredMinishiftVersionCheck(headers); err != nil {
+		return nil, err
+	}
 	if err := varDefaultsCheck(headers); err != nil {
 		return nil, err
+	}
+	if !checkDependencySemantic(headers) {
+		return nil, fmt.Errorf("The Dependencies should be a comma seperated list of Add-ons.")
 	}
 
 	metaData := &DefaultAddOnMeta{headers: headers}
@@ -80,6 +93,19 @@ func (meta *DefaultAddOnMeta) Description() []string {
 	return meta.headers[requiredMetaTags[1]].([]string)
 }
 
+func (meta *DefaultAddOnMeta) Url() string {
+	if meta.headers["url"] != nil {
+		return meta.headers["url"].(string)
+	}
+	if meta.headers["URL"] != nil {
+		return meta.headers["URL"].(string)
+	}
+	if meta.headers["Url"] != nil {
+		return meta.headers["Url"].(string)
+	}
+	return ""
+}
+
 func (meta *DefaultAddOnMeta) RequiredVars() ([]string, error) {
 	if val, contains := meta.headers[requiredVars].(string); contains {
 		return minishiftStrings.SplitAndTrim(val, ",")
@@ -95,6 +121,10 @@ func (meta *DefaultAddOnMeta) VarDefaults() ([]RequiredVar, error) {
 		defaults := make([]RequiredVar, 0, len(items))
 		for _, item := range items {
 			varDefault, _ := minishiftStrings.SplitAndTrim(item, "=")
+			// In case of value of varDefault is null/Null/NULL then value converted to empty string.
+			if strings.ToLower(varDefault[1]) == "null" {
+				varDefault[1] = ""
+			}
 			defaults = append(defaults, RequiredVar{Key: varDefault[0], Value: varDefault[1]})
 		}
 
@@ -113,6 +143,30 @@ func (meta *DefaultAddOnMeta) OpenShiftVersion() string {
 		return val
 	}
 	return anyOpenShiftVersion
+}
+
+func (meta *DefaultAddOnMeta) MinishiftVersion() string {
+	if val, contains := meta.headers[RequiredMinishiftVersion].(string); contains {
+		return val
+	}
+	return anyMinishiftVersion
+}
+
+func (meta *DefaultAddOnMeta) Dependency() ([]string, error) {
+	if val, contains := meta.headers[dependsOn].(string); contains {
+		return minishiftStrings.SplitAndTrim(val, ",")
+	}
+	return []string{}, nil
+}
+
+func checkDependencySemantic(headers map[string]interface{}) bool {
+	// Comma seperated list of dependencies
+	if headers[dependsOn] != nil {
+		dependencies := headers[dependsOn].(string)
+		match, _ := regexp.MatchString("^(([a-zA-Z][-[a-zA-Z]*)([,][ ]?[a-zA-Z][-[a-zA-Z]*)*)$", dependencies)
+		return match
+	}
+	return true
 }
 
 func checkVersionSemantic(version string) bool {
@@ -146,7 +200,17 @@ func requiredMetaTagsCheck(headers map[string]interface{}) error {
 func requiredOpenShiftVersionCheck(headers map[string]interface{}) error {
 	if headers[RequiredOpenShiftVersion] != nil {
 		if !checkVersionSemantic(headers[RequiredOpenShiftVersion].(string)) {
-			return errors.New("Add-on only support OpenShift version semantics eg. 3.6.0 or >3.6.0, <3.9.0 or >=3.5 etc.")
+			return errors.New("Add-on supports OpenShift version semantics (eg. 3.6.0, >3.6.0, <3.6.0 or >=3.6 etc.")
+		}
+	}
+
+	return nil
+}
+
+func requiredMinishiftVersionCheck(headers map[string]interface{}) error {
+	if headers[RequiredMinishiftVersion] != nil {
+		if !checkVersionSemantic(headers[RequiredMinishiftVersion].(string)) {
+			return errors.New("Add-on supports Minishift version semantics (eg. 1.22.0, >1.21.0, <1.22.0 or >=1.22.0 etc.")
 		}
 	}
 

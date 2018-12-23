@@ -17,28 +17,31 @@ limitations under the License.
 package cmd
 
 import (
+	"encoding/json"
 	goflag "flag"
 	"fmt"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
-
-	"path/filepath"
-
-	"encoding/json"
 
 	"github.com/docker/machine/libmachine/log"
 	"github.com/golang/glog"
 	"github.com/minishift/minishift/cmd/minishift/cmd/addon"
+	cmdAddon "github.com/minishift/minishift/cmd/minishift/cmd/addon"
 	configCmd "github.com/minishift/minishift/cmd/minishift/cmd/config"
+	"github.com/minishift/minishift/cmd/minishift/cmd/dns"
 	hostfolderCmd "github.com/minishift/minishift/cmd/minishift/cmd/hostfolder"
 	"github.com/minishift/minishift/cmd/minishift/cmd/image"
+	cmdImage "github.com/minishift/minishift/cmd/minishift/cmd/image"
 	cmdOpenshift "github.com/minishift/minishift/cmd/minishift/cmd/openshift"
 	cmdProfile "github.com/minishift/minishift/cmd/minishift/cmd/profile"
+	servicesCmd "github.com/minishift/minishift/cmd/minishift/cmd/services"
 	cmdUtil "github.com/minishift/minishift/cmd/minishift/cmd/util"
 	"github.com/minishift/minishift/pkg/minikube/constants"
 	minishiftConfig "github.com/minishift/minishift/pkg/minishift/config"
+	minishiftConstants "github.com/minishift/minishift/pkg/minishift/constants"
 	profileActions "github.com/minishift/minishift/pkg/minishift/profile"
 	"github.com/minishift/minishift/pkg/util/filehelper"
 	"github.com/minishift/minishift/pkg/util/os/atexit"
@@ -51,12 +54,11 @@ import (
 )
 
 const (
-	showLibmachineLogs    = "show-libmachine-logs"
-	profileCmd            = "profile"
-	profileFlag           = "profile"
-	profileSetCmd         = "set"
-	enableExperimentalEnv = "MINISHIFT_ENABLE_EXPERIMENTAL"
-	invalidProfileName    = "Profile names must consist of alphanumeric characters only."
+	showLibmachineLogs = "show-libmachine-logs"
+	profileCmd         = "profile"
+	profileFlag        = "profile"
+	profileSetCmd      = "set"
+	invalidProfileName = "Profile names must consist of alphanumeric characters only."
 )
 
 var viperWhiteList = []string{
@@ -85,7 +87,7 @@ var RootCmd = &cobra.Command{
 		constants.Minipath = constants.GetProfileHomeDir(constants.ProfileName)
 
 		// Initialize the instance directory structure
-		state.InstanceDirs = state.NewMinishiftDirs(constants.Minipath)
+		state.InstanceDirs = state.GetMinishiftDirsStructure(constants.Minipath)
 
 		constants.KubeConfigPath = filepath.Join(state.InstanceDirs.Machines, constants.MachineName+"_kubeconfig")
 
@@ -96,6 +98,21 @@ var RootCmd = &cobra.Command{
 		// creating all directories for minishift run
 		createMinishiftDirs(state.InstanceDirs)
 
+		// Ensure the global viper config file exists.
+		ensureConfigFileExists(constants.GlobalConfigFile)
+
+		// Ensure the viper config file exists.
+		ensureConfigFileExists(constants.ConfigFile)
+
+		// Read the config file and get the details about existing image cache.
+		// This should be removed after 2-3 release of minishift.
+		cfg, err := minishiftConfig.ReadViperConfig(constants.ConfigFile)
+		if err != nil {
+			atexit.ExitWithMessage(1, err.Error())
+		}
+		cacheImages := cmdImage.GetConfiguredCachedImages(cfg)
+		addonConfig := cmdAddon.GetAddOnConfiguration()
+
 		// If AllInstanceConfig is not defined we should define it now.
 		if minishiftConfig.AllInstancesConfig == nil {
 			ensureAllInstanceConfigPath(constants.AllInstanceConfigPath)
@@ -105,13 +122,59 @@ var RootCmd = &cobra.Command{
 			}
 		}
 
-		ensureConfigFileExists(constants.ConfigFile)
+		// If older instance state config file exists, rename the file else create a new file
+		_, err = os.Stat(minishiftConstants.GetInstanceStateConfigOldPath())
+		if err == nil {
+			if err := os.Rename(minishiftConstants.GetInstanceStateConfigOldPath(), minishiftConstants.GetInstanceStateConfigPath()); err != nil {
+				atexit.ExitWithMessage(1, fmt.Sprintf("Error moving old state config to new one: %s", err.Error()))
+			}
+		}
 
-		// Create MACHINE_NAME.json
-		instanceConfigPath := filepath.Join(constants.Minipath, "machines", constants.MachineName+".json")
-		minishiftConfig.InstanceConfig, err = minishiftConfig.NewInstanceConfig(instanceConfigPath)
+		minishiftConfig.InstanceStateConfig, err = minishiftConfig.NewInstanceStateConfig(minishiftConstants.GetInstanceStateConfigPath())
 		if err != nil {
 			atexit.ExitWithMessage(1, fmt.Sprintf("Error creating config for VM: %s", err.Error()))
+		}
+
+		// Create MACHINE_NAME.json (machine config file)
+		minishiftConfig.InstanceConfig, err = minishiftConfig.NewInstanceConfig(minishiftConstants.GetInstanceConfigPath())
+		if err != nil {
+			atexit.ExitWithMessage(1, fmt.Sprintf("Error creating config for VM: %s", err.Error()))
+		}
+
+		// If hostfolder config exists for an instance then copy it to the new instance state config.
+		// This change should be removed after few releases.
+		hostfolder := minishiftConfig.InstanceStateConfig.HostFolders
+		if len(hostfolder) != 0 {
+			minishiftConfig.InstanceConfig.HostFolders = hostfolder
+			if err != minishiftConfig.InstanceConfig.Write() {
+				atexit.ExitWithMessage(1, fmt.Sprintf("Error coping existing hostfolder to new instance config: %s", err.Error()))
+			}
+		}
+
+		// If cache-config exists then copy it to the new instance config.
+		// This should be removed after 2-3 release of Minishift.
+		if len(cacheImages) != 0 {
+			minishiftConfig.InstanceConfig.CacheImages = cacheImages
+			if err != minishiftConfig.InstanceConfig.Write() {
+				atexit.ExitWithMessage(1, fmt.Sprintf("Error coping existing cache images to new instance config: %s", err.Error()))
+			}
+			delete(cfg, "cache-images")
+			if err != minishiftConfig.WriteViperConfig(constants.ConfigFile, cfg) {
+				atexit.ExitWithMessage(1, fmt.Sprintf("Error removing the cache-images entry from older config %s: %s", constants.ConfigFile, err.Error()))
+			}
+		}
+
+		// If addon config exists then copy it to the new instance config.
+		// This should be removed after 2-3 release of Minishift.
+		if len(addonConfig) != 0 {
+			minishiftConfig.InstanceConfig.AddonConfig = addonConfig
+			if err != minishiftConfig.InstanceConfig.Write() {
+				atexit.ExitWithMessage(1, fmt.Sprintf("Error coping existing addon config to new instance config: %s", err.Error()))
+			}
+			delete(cfg, "addons")
+			if err != minishiftConfig.WriteViperConfig(constants.ConfigFile, cfg) {
+				atexit.ExitWithMessage(1, fmt.Sprintf("Error removing the addon config entry from older config %s: %s", constants.ConfigFile, err.Error()))
+			}
 		}
 
 		if isAddonInstallRequired {
@@ -141,6 +204,11 @@ var RootCmd = &cobra.Command{
 		}
 
 		setDefaultActiveProfile()
+
+		// Adding minishift version information to debug logs
+		if glog.V(2) {
+			fmt.Println(fmt.Sprintf("-- minishift version: v%s+%s", version.GetMinishiftVersion(), version.GetCommitSha()))
+		}
 	},
 }
 
@@ -170,7 +238,7 @@ func setFlagsUsingViper() {
 }
 
 func processEnvVariables() {
-	enableExperimental, err := cmdUtil.GetBoolEnv(enableExperimentalEnv)
+	enableExperimental, err := cmdUtil.GetBoolEnv(minishiftConstants.MinishiftEnableExperimental)
 	if err == cmdUtil.BooleanFormatError {
 		atexit.ExitWithMessage(1, fmt.Sprintf("Error enabling experimental features: %s", err))
 	}
@@ -184,10 +252,14 @@ func init() {
 	RootCmd.PersistentFlags().String(profileFlag, constants.DefaultProfileName, "Profile name")
 	RootCmd.AddCommand(configCmd.ConfigCmd)
 	RootCmd.AddCommand(cmdOpenshift.OpenShiftCmd)
-	RootCmd.AddCommand(hostfolderCmd.HostfolderCmd)
+	RootCmd.AddCommand(hostfolderCmd.HostFolderCmd)
+	RootCmd.AddCommand(servicesCmd.ServicesCmd)
 	RootCmd.AddCommand(addon.AddonsCmd)
 	RootCmd.AddCommand(image.ImageCmd)
 	RootCmd.AddCommand(cmdProfile.ProfileCmd)
+	if minishiftConfig.EnableExperimental {
+		RootCmd.AddCommand(dns.DnsCmd)
+	}
 	pflag.CommandLine.AddGoFlagSet(goflag.CommandLine)
 	logDir := pflag.Lookup("log_dir")
 	if !logDir.Changed {
@@ -195,6 +267,8 @@ func init() {
 	}
 	viper.BindPFlags(RootCmd.PersistentFlags())
 	cobra.OnInitialize(initConfig)
+	verbosity := pflag.Lookup("v")
+	verbosity.Usage += ". Level varies from 1 to 5 (default 1)."
 }
 
 // initConfig reads in config file and ENV variables if set.
@@ -204,12 +278,21 @@ func initConfig() {
 		constants.ProfileName = profile
 		constants.ConfigFile = constants.MakeMiniPath("profiles", profile, "config", "config.json")
 	}
-	configPath := constants.ConfigFile
-	viper.SetConfigFile(configPath)
+
+	// Initializing the global config file with Viper
+	viper.SetConfigFile(constants.GlobalConfigFile)
 	viper.SetConfigType("json")
 	err := viper.ReadInConfig()
 	if err != nil {
-		glog.Warningf("Error reading config file at %s: %s", configPath, err)
+		glog.Warningf("Error reading config file at '%s': %s", constants.GlobalConfigFile, err)
+	}
+
+	configPath := constants.ConfigFile
+	viper.SetConfigFile(configPath)
+	viper.SetConfigType("json")
+	err = viper.MergeInConfig()
+	if err != nil {
+		glog.Warningf("Error reading config file at '%s': %s", configPath, err)
 	}
 	setupViper()
 }
@@ -293,12 +376,12 @@ func ensureConfigFileExists(configPath string) {
 		jsonRoot := []byte("{}")
 		f, err := os.Create(configPath)
 		if err != nil {
-			glog.Exitf("Cannot create file %s: %s", configPath, err)
+			glog.Exitf("Cannot create file '%s': %s", configPath, err)
 		}
 		defer f.Close()
 		_, err = f.Write(jsonRoot)
 		if err != nil {
-			glog.Exitf("Cannot encode config %s: %s", configPath, err)
+			glog.Exitf("Cannot encode config '%s': %s", configPath, err)
 		}
 	}
 }
@@ -320,7 +403,7 @@ func performPostUpdateExecution(markerPath string) error {
 		fmt.Print("--- Updating default add-ons ... ")
 		cmdUtil.UnpackAddons(state.InstanceDirs.Addons)
 		fmt.Println("OK")
-		fmt.Println(fmt.Sprintf("Default add-ons %s installed", strings.Join(cmdUtil.DefaultAssets, ", ")))
+		fmt.Println(fmt.Sprintf("Default add-ons '%s' installed", strings.Join(cmdUtil.DefaultAssets, ", ")))
 	}
 
 	// Delete the marker file once post update execution is done
@@ -381,7 +464,7 @@ func checkForValidProfileOrExit(cmd *cobra.Command) {
 		// This condition true for each command execpt `minishift profile <subcommand>` and `minishift start ...``
 		if cmd.Parent().Name() != profileCmd && cmd.Name() != startCmd.Name() {
 			if !cmdUtil.IsValidProfile(constants.ProfileName) {
-				atexit.ExitWithMessage(1, fmt.Sprintf("Profile: %s doesn't exist, Use `minishift profile set %s` or `minishift start --profile %s` to create", constants.ProfileName, constants.ProfileName, constants.ProfileName))
+				atexit.ExitWithMessage(1, fmt.Sprintf("Profile '%s' doesn't exist, Use 'minishift profile set %s' or 'minishift start --profile %s' to create", constants.ProfileName, constants.ProfileName, constants.ProfileName))
 			}
 		}
 	}

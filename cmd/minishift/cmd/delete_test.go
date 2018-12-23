@@ -17,11 +17,13 @@ limitations under the License.
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
 	"github.com/minishift/minishift/cmd/testing/cli"
 	pgkTesting "github.com/minishift/minishift/pkg/testing"
+	"github.com/stretchr/testify/assert"
 
 	"github.com/minishift/minishift/cmd/minishift/state"
 	"github.com/minishift/minishift/pkg/util/filehelper"
@@ -39,9 +41,8 @@ func Test_clear_cache_user_confirms(t *testing.T) {
 	atexit.RegisterExitHandler(cli.PreventAtExit(t))
 	clearCache()
 
-	if filehelper.Exists(state.InstanceDirs.Cache) {
-		t.Fatalf("Expected cache dir '%s' to be deleted", state.InstanceDirs.Cache)
-	}
+	assert.False(t, filehelper.Exists(state.InstanceDirs.Cache),
+		fmt.Sprintf("Expected cache dir '%s' to be deleted", state.InstanceDirs.Cache))
 }
 
 func Test_clear_cache_user_aborts(t *testing.T) {
@@ -53,9 +54,9 @@ func Test_clear_cache_user_aborts(t *testing.T) {
 	defer cli.ResetStdin(origStdin, tmpFile)
 
 	clearCache()
-	if !filehelper.Exists(state.InstanceDirs.Cache) {
-		t.Fatalf("Expected cache dir '%s' to still exist", state.InstanceDirs.Cache)
-	}
+
+	assert.DirExists(t, state.InstanceDirs.Cache,
+		fmt.Sprintf("Expected cache dir '%s' to still exist", state.InstanceDirs.Cache))
 }
 
 func Test_clear_cache_forced(t *testing.T) {
@@ -67,9 +68,7 @@ func Test_clear_cache_forced(t *testing.T) {
 	forceFlag = true
 	clearCache()
 
-	if filehelper.Exists(state.InstanceDirs.Cache) {
-		t.Fatalf("Expected cache dir '%s' to be deleted", state.InstanceDirs.Cache)
-	}
+	assert.False(t, filehelper.Exists(state.InstanceDirs.Cache), "Expected cache dir '%s' to be deleted", state.InstanceDirs.Cache)
 }
 
 func Test_delete_succeeds_for_non_existing_vm(t *testing.T) {

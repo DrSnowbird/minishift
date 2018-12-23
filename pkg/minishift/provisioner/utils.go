@@ -20,19 +20,12 @@ package provisioner
 import (
 	"fmt"
 	"path"
-	"path/filepath"
 	"strings"
 
 	"github.com/docker/machine/libmachine/auth"
-	"github.com/docker/machine/libmachine/cert"
-	"github.com/docker/machine/libmachine/engine"
 	"github.com/docker/machine/libmachine/log"
-	"github.com/docker/machine/libmachine/mcnutils"
 	"github.com/docker/machine/libmachine/provision"
-	"github.com/docker/machine/libmachine/provision/serviceaction"
-	"github.com/minishift/minishift/pkg/minikube/assets"
-	"github.com/minishift/minishift/pkg/minikube/sshutil"
-	"github.com/pkg/errors"
+	minishiftConfig "github.com/minishift/minishift/pkg/minishift/config"
 )
 
 var (
@@ -67,6 +60,24 @@ ExecStart=/usr/bin/dockerd-current -H tcp://0.0.0.0:{{.DockerPort}} -H unix:///v
            {{ range .EngineOptions.Labels }}--label {{.}} {{ end }}{{ range .EngineOptions.InsecureRegistry }}--insecure-registry {{.}} {{ end }}{{ range .EngineOptions.RegistryMirror }}--registry-mirror {{.}} {{ end }}{{ range .EngineOptions.ArbitraryFlags }}--{{.}} {{ end }}
 Environment={{range .EngineOptions.Env}}{{ printf "%q" . }} {{end}}
 `
+
+	engineConfigTemplateFedora = `[Service]
+ExecStart=
+ExecStart=/usr/bin/dockerd-current -H tcp://0.0.0.0:{{.DockerPort}} -H unix:///var/run/docker.sock \
+		  --add-runtime oci=/usr/libexec/docker/docker-runc-current \
+          --default-runtime=oci \
+          --authorization-plugin=rhel-push-plugin \
+          --containerd /run/containerd.sock \
+          --exec-opt native.cgroupdriver=systemd \
+          --userland-proxy-path=/usr/libexec/docker/docker-proxy-current \
+          --init-path=/usr/libexec/docker/docker-init-current \
+          --seccomp-profile=/etc/docker/seccomp.json \
+		  --storage-driver {{.EngineOptions.StorageDriver}} --tlsverify --tlscacert {{.AuthOptions.CaCertRemotePath}} \
+		  --tlscert {{.AuthOptions.ServerCertRemotePath}} --tlskey {{.AuthOptions.ServerKeyRemotePath}} \
+           {{ range .EngineOptions.Labels }}--label {{.}} {{ end }}{{ range .EngineOptions.InsecureRegistry }}--insecure-registry {{.}} {{ end }}{{ range .EngineOptions.RegistryMirror }}--registry-mirror {{.}} {{ end }}{{ range .EngineOptions.ArbitraryFlags }}--{{.}} {{ end }}
+Environment={{range .EngineOptions.Env}}{{ printf "%q" . }} {{end}}
+`
+
 	engineConfigTemplateBuildRoot = `[Unit]
 Description=Docker Application Container Engine
 Documentation=https://docs.docker.com
@@ -143,7 +154,7 @@ func decideStorageDriver(p provision.Provisioner, defaultDriver, suppliedDriver 
 
 	defer func() {
 		if bestSuitedDriver != "" {
-			log.Debugf("No storage driver specified, instead using %s\n", bestSuitedDriver)
+			log.Debugf("No storage driver specified, instead using '%s'\n", bestSuitedDriver)
 		}
 	}()
 
@@ -175,93 +186,26 @@ func getFilesystemType(p provision.Provisioner, directory string) (string, error
 	return fstype, nil
 }
 
-func configureAuth(p *BuildrootProvisioner) error {
-	driver := p.GetDriver()
-	machineName := driver.GetMachineName()
-	authOptions := p.GetAuthOptions()
-	org := mcnutils.GetUsername() + "." + machineName
-	bits := 2048
+func checkDetectionValue(value string) bool {
+	return strings.Trim(value, "\n") == "1"
+}
 
-	ip, err := driver.GetIP()
-	if err != nil {
-		return errors.Wrap(err, "error getting ip during provisioning")
-	}
+func doFeatureDetection(p provision.Provisioner) error {
+	testFor := "test -f %s && echo '1' || echo '0'"
 
-	hostCerts := map[string]string{
-		authOptions.CaCertPath:     filepath.Join(authOptions.StorePath, "ca.pem"),
-		authOptions.ClientCertPath: filepath.Join(authOptions.StorePath, "cert.pem"),
-		authOptions.ClientKeyPath:  filepath.Join(authOptions.StorePath, "key.pem"),
-	}
-
-	for src, dst := range hostCerts {
-		f, err := assets.NewFileAsset(src, filepath.Dir(dst), filepath.Base(dst), "0777")
-		if err != nil {
-			return errors.Wrapf(err, "open cert file: %s", src)
-		}
-		if err := assets.CopyFileLocal(f); err != nil {
-			return errors.Wrapf(err, "transferring file: %+v", f)
-		}
-	}
-
-	// The Host IP is always added to the certificate's SANs list
-	hosts := append(authOptions.ServerCertSANs, ip, "localhost")
-	log.Debugf("generating server cert: %s ca-key=%s private-key=%s org=%s san=%s",
-		authOptions.ServerCertPath,
-		authOptions.CaCertPath,
-		authOptions.CaPrivateKeyPath,
-		org,
-		hosts,
-	)
-
-	err = cert.GenerateCert(&cert.Options{
-		Hosts:     hosts,
-		CertFile:  authOptions.ServerCertPath,
-		KeyFile:   authOptions.ServerKeyPath,
-		CAFile:    authOptions.CaCertPath,
-		CAKeyFile: authOptions.CaPrivateKeyPath,
-		Org:       org,
-		Bits:      bits,
-	})
-
-	if err != nil {
-		return fmt.Errorf("error generating server cert: %s", err)
-	}
-
-	remoteCerts := map[string]string{
-		authOptions.CaCertPath:     authOptions.CaCertRemotePath,
-		authOptions.ServerCertPath: authOptions.ServerCertRemotePath,
-		authOptions.ServerKeyPath:  authOptions.ServerKeyRemotePath,
-	}
-
-	sshClient, err := sshutil.NewSSHClient(driver)
-	if err != nil {
-		return errors.Wrap(err, "provisioning: error getting ssh client")
-	}
-
-	for src, dst := range remoteCerts {
-		f, err := assets.NewFileAsset(src, filepath.Dir(dst), filepath.Base(dst), "0640")
-		if err != nil {
-			return errors.Wrapf(err, "error copying %s to %s", src, dst)
-		}
-		if err := sshutil.TransferFile(f, sshClient); err != nil {
-			return errors.Wrapf(err, "transfering file to machine %v", f)
-		}
-	}
-
-	dockerCfg, err := p.GenerateDockerOptions(engine.DefaultPort)
-	if err != nil {
-		return errors.Wrap(err, "generating docker options")
-	}
-
-	log.Info("Setting Docker configuration on the remote daemon...")
-
-	if _, err = p.SSHCommand(fmt.Sprintf("sudo mkdir -p %s && printf %%s \"%s\" | sudo tee %s", path.Dir(dockerCfg.EngineOptionsPath), dockerCfg.EngineOptions, dockerCfg.EngineOptionsPath)); err != nil {
+	if networkAssignment, err := p.SSHCommand(fmt.Sprintf(testFor, "/usr/local/bin/minishift-set-ipaddress")); err == nil {
+		minishiftConfig.InstanceStateConfig.SupportsNetworkAssignment = checkDetectionValue(networkAssignment)
+	} else {
 		return err
 	}
 
-	if err := p.Service("docker", serviceaction.Restart); err != nil {
+	if dnsmasqServer, err := p.SSHCommand(fmt.Sprintf(testFor, "/usr/sbin/dnsmasq")); err == nil {
+		minishiftConfig.InstanceStateConfig.SupportsDnsmasqServer = checkDetectionValue(dnsmasqServer)
+	} else {
 		return err
 	}
+
+	minishiftConfig.InstanceStateConfig.Write()
 
 	return nil
 }

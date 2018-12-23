@@ -24,7 +24,7 @@ import (
 	"time"
 )
 
-const invalidSleepTimeError = "Unable to extract sleep time from cmd: %s"
+const invalidSleepTimeError = "Unable to extract sleep time from cmd: '%s'"
 
 var sleepRegexp = regexp.MustCompile(`sleep (\d+)`)
 
@@ -32,14 +32,14 @@ type SleepCommand struct {
 	*defaultCommand
 }
 
-func NewSleepCommand(command string) *SleepCommand {
-	defaultCommand := &defaultCommand{rawCommand: command}
+func NewSleepCommand(command string, ignoreError bool) *SleepCommand {
+	defaultCommand := &defaultCommand{rawCommand: command, ignoreError: ignoreError}
 	sleepCommand := &SleepCommand{defaultCommand}
 	defaultCommand.fn = sleepCommand.doExecute
 	return sleepCommand
 }
 
-func (c *SleepCommand) doExecute(ec *ExecutionContext) error {
+func (c *SleepCommand) doExecute(ec *ExecutionContext, ignoreError bool, outputVariable string) error {
 	duration, err := c.getSleepTime()
 	if err != nil {
 		return err

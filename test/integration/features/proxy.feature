@@ -1,4 +1,6 @@
-@proxy @minishift-only
+@proxy @core @disabled
+# This feature file is disabled because of an existing issue in oc cluster up version 3.11
+# https://github.com/openshift/origin/issues/21252
 Feature: Minishift can run behind proxy
   As a user I can use Minishift behind a proxy.
   INFO: Code behind this feature will start a proxy server in background
@@ -12,6 +14,7 @@ Feature: Minishift can run behind proxy
 
   Scenario: Start behind the proxy
    Given user starts proxy server and sets MINISHIFT_HTTP_PROXY variable
+     And image caching is disabled
     When executing "minishift start" succeeds
     Then proxy log should contain "Accepting CONNECT to registry-1.docker.io:443"
      And proxy log should contain "Accepting CONNECT to auth.docker.io:443"
@@ -38,18 +41,15 @@ Feature: Minishift can run behind proxy
      """
 
   Scenario: User can deploy application ruby-ex to namespace ruby
-    Given Minishift has state "Running"
-     When executing "oc new-app centos/ruby-22-centos7~https://github.com/openshift/ruby-ex.git" succeeds
-     Then stdout should contain
-      """
-      Success
-      """
-    When executing "oc rollout status deploymentconfig ruby-ex --watch" succeeds
+   Given Minishift has state "Running"
+     And executing "oc status" retrying 20 times with wait period of "3s"
+    When executing "oc new-app centos/ruby-22-centos7~https://github.com/sclorg/ruby-ex.git" succeeds
     Then stdout should contain
      """
-     "ruby-ex-1" successfully rolled out
+     Success
      """
-     And proxy log should contain "Accepting CONNECT to registry-1.docker.io:443"
+    When service "ruby-ex" rollout successfully within "20m"
+    Then proxy log should contain "Accepting CONNECT to registry-1.docker.io:443"
      And proxy log should contain "Accepting CONNECT to bundler.rubygems.org:443"
      And proxy log should contain "Accepting CONNECT to rubygems.org:443"
 

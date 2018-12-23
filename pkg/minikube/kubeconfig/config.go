@@ -17,97 +17,34 @@ limitations under the License.
 package kubeconfig
 
 import (
-	"errors"
 	"fmt"
+	"github.com/docker/machine/libmachine/provision"
 	"io/ioutil"
-	"os"
-	"path/filepath"
-
-	"github.com/minishift/minishift/pkg/util"
-	"gopkg.in/yaml.v2"
 )
 
-// kubeconfig Data types
-type ClusterType struct {
-	Cluster map[string]string `yaml:"cluster"`
-	Name    string            `yaml:"name"`
-}
-
-type ContextType struct {
-	Context map[string]string `yaml:"context"`
-	Name    string            `yaml:"name"`
-}
-
-type UserType struct {
-	User map[string]string `yaml:"user"`
-	Name string            `yaml:"name"`
-}
-
-type SystemKubeConfig struct {
-	ApiVersion     string        `yaml:"apiVersion"`
-	Clusters       []ClusterType `yaml:"clusters"`
-	Contexts       []ContextType `yaml:"contexts"`
-	CurrentContext string        `yaml:"current-context"`
-	Users          []UserType    `yaml:"users"`
-}
-
-func GetConfigPath() string {
-	var configPath = filepath.Join(util.HomeDir(), ".kube", "config")
-	if os.Getenv("KUBECONFIG") != "" {
-		configPath = os.Getenv("KUBECONFIG")
-	}
-	return configPath
-}
-
 // Cache system admin entries to be used to run oc commands
-func CacheSystemAdminEntries(systemEntriesConfigPath, clusterName string, userName string) error {
-	config, err := Read(GetConfigPath())
+func CacheSystemAdminEntries(systemEntriesConfigPath string, ocPath string, sshCommander provision.SSHCommander) error {
+	// There is another easy way to get config for current context
+	// oc login -u system:admin
+	// oc config view --minify --raw=true
+	// We need to login as system:admin because then only config view will have client-certificate-data
+	// and client-key-data which is associated with admin and all the operation we do as oc runner.
+	cmd := fmt.Sprintf("%s login -u system:admin", ocPath)
+	_, err := sshCommander.SSHCommand(cmd)
 	if err != nil {
-		return errors.New(fmt.Sprintf("Error reading config file %s", systemEntriesConfigPath))
+		return err
 	}
 
-	targetConfig := SystemKubeConfig{ApiVersion: "v1"}
-	for k, v := range config.Clusters {
-		if v.Name == clusterName {
-			targetConfig.Clusters = append(targetConfig.Clusters, config.Clusters[k])
-			break
-		}
-	}
-
-	targetConfig.CurrentContext = fmt.Sprintf("default/%s/system:admin", clusterName)
-	for k, v := range config.Contexts {
-		if v.Name == targetConfig.CurrentContext {
-			targetConfig.Contexts = append(targetConfig.Contexts, config.Contexts[k])
-			break
-		}
-	}
-
-	for k, v := range config.Users {
-		if v.Name == userName {
-			targetConfig.Users = append(targetConfig.Users, config.Users[k])
-			break
-		}
-	}
-
-	yamlData, err := yaml.Marshal(&targetConfig)
+	cmd = fmt.Sprintf("%s config view --minify --raw=true", ocPath)
+	out, err := sshCommander.SSHCommand(cmd)
 	if err != nil {
-		return errors.New("Error marshalling system kubeconfig entries")
+		return err
 	}
+
 	// Write to machines/<MACHINE_NAME>_kubeconfig
-	if err = ioutil.WriteFile(systemEntriesConfigPath, yamlData, 0644); err != nil {
+	if err := ioutil.WriteFile(systemEntriesConfigPath, []byte(out), 0644); err != nil {
 		return err
 	}
 
 	return nil
-}
-
-func Read(configPath string) (SystemKubeConfig, error) {
-	config := SystemKubeConfig{}
-	data, _ := ioutil.ReadFile(configPath)
-	err := yaml.Unmarshal([]byte(data), &config)
-	if err != nil {
-		return config, err
-	}
-
-	return config, nil
 }

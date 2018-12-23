@@ -17,26 +17,83 @@ limitations under the License.
 package powershell
 
 import (
-	ps "github.com/gorillalabs/go-powershell"
-	"github.com/gorillalabs/go-powershell/backend"
+	"bytes"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"os/exec"
+)
+
+var (
+	runAsCmds = []string{
+		`$myWindowsID = [System.Security.Principal.WindowsIdentity]::GetCurrent();`,
+		`$myWindowsPrincipal = New-Object System.Security.Principal.WindowsPrincipal($myWindowsID);`,
+		`$adminRole = [System.Security.Principal.WindowsBuiltInRole]::Administrator;`,
+		`if (-Not ($myWindowsPrincipal.IsInRole($adminRole))) {`,
+		`$newProcess = New-Object System.Diagnostics.ProcessStartInfo "PowerShell";`,
+		`$newProcess.Arguments = "& '" + $script:MyInvocation.MyCommand.Path + "'"`,
+		`$newProcess.Verb = "runas";`,
+		`[System.Diagnostics.Process]::Start($newProcess);`,
+		`Exit;`,
+		`}`,
+	}
+	isAdminCmds = []string{
+		"$currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())",
+		"$currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)",
+	}
 )
 
 type PowerShell struct {
-	powerShell ps.Shell
+	powerShell string
 }
 
 func New() *PowerShell {
+	ps, _ := exec.LookPath("powershell.exe")
 	return &PowerShell{
-		powerShell: createPowerShell(),
+		powerShell: ps,
 	}
 }
-func (p *PowerShell) Execute(command string) (stdOut string, stdErr string) {
-	stdOut, stdErr, _ = p.powerShell.Execute(command)
+
+func IsAdmin() bool {
+	ps := New()
+	cmd := strings.Join(isAdminCmds, ";")
+	stdOut, _, err := ps.Execute(cmd)
+	if err != nil {
+		return false
+	}
+	if strings.TrimSpace(stdOut) == "False" {
+		return false
+	}
+
+	return true
+}
+
+func (p *PowerShell) Execute(args ...string) (stdOut string, stdErr string, err error) {
+	args = append([]string{"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "RemoteSigned", "-Command"}, args...)
+	cmd := exec.Command(p.powerShell, args...)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err = cmd.Run()
+	stdOut, stdErr = stdout.String(), stderr.String()
 	return
 }
 
-func createPowerShell() ps.Shell {
-	back := &backend.Local{}
-	shell, _ := ps.New(back)
-	return shell
+func (p *PowerShell) ExecuteAsAdmin(cmd string) (stdOut string, stdErr string, err error) {
+	scriptContent := strings.Join(append(runAsCmds, cmd), "\n")
+
+	tempDir, _ := ioutil.TempDir("", "psScripts")
+	psFile, err := os.Create(filepath.Join(tempDir, "runAsAdmin.ps1"))
+	if err != nil {
+		return "", "", err
+	}
+
+	psFile.WriteString(scriptContent)
+	psFile.Close()
+	return p.Execute(psFile.Name())
 }

@@ -53,13 +53,19 @@ You can also add this variable in your shell profile so you don't need to manual
 While {project} starts, it runs several startup checks to make sure that the {project} VM and the OpenShift Cluster are able to start without any issues.
 If any configuration is incorrect or missing, the startup checks fail and {project} does not start.
 
+- You can skip the startup checks by executing the following command:
++
+----
+$ minishift config set skip-startup-checks true
+----
+
 The following sections describe the different startup checks.
 
 [[driver-plugin-check]]
 === Driver plug-in configuration
 
 One of the startup checks verifies that the relevant driver plug-in is configured correctly.
-If this startup check fails, review the xref:../getting-started/setting-up-driver-plugin.adoc#[setting up the driver plug-in] topic and configure the driver.
+If this startup check fails, review the xref:../getting-started/setting-up-virtualization-environment.adoc#[Setting Up the Virtualization Environment] topic and configure the appropriate driver.
 
 If you want to force {project} to start despite a failing driver plugin-in check, you can instruct {project} to treat these errors as warnings:
 
@@ -138,3 +144,18 @@ Downloading https://github.com/minishift/minishift/releases/download/v1.2.0/mini
  65 B / 65 B [===================================================================================================================================================] 100.00% 0s
 Update failed: open /usr/bin/.minishift.new: permission denied
 ----
+
+[[openshift-web-console-does-not-work-in-older-versions-of-safari]]
+== OpenShift web console does not work with older versions of Safari
+
+`minishift console` does not work on older versions of Safari web browser such as version 10.1.2 (12603.3.8).
+Attempting to access the web console results in the following error:
+
+----
+Error unable to load details about the server
+----
+
+Retry after updating it to the latest version or use Firefox or Chrome browser for this.
+Version 11.0.3 (13604.5.6) has been tested and works with OpenShift web console.
+You can use `minishift console --url` to get the web console URL.
+

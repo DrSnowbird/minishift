@@ -21,7 +21,7 @@ import (
 	"strings"
 
 	"github.com/golang/glog"
-	"github.com/minishift/minishift/pkg/minishift/constants"
+	minishiftConstants "github.com/minishift/minishift/pkg/minishift/constants"
 	"github.com/minishift/minishift/pkg/minishift/docker"
 	"github.com/pborman/uuid"
 )
@@ -32,70 +32,88 @@ type OpenShiftPatchTarget struct {
 	localConfigFile     string
 }
 
-var (
-	MASTER = OpenShiftPatchTarget{
-		"master",
-		"/var/lib/origin/openshift.local.config/master/master-config.yaml",
-		"/var/lib/minishift/openshift.local.config/master/master-config.yaml",
-	}
-
-	NODE = OpenShiftPatchTarget{
-		"node",
-		"/var/lib/origin/openshift.local.config/node-localhost/node-config.yaml",
-		"/var/lib/minishift/openshift.local.config/node-localhost/node-config.yaml",
-	}
-
-	UNKNOWN = OpenShiftPatchTarget{
-		"unkown",
-		"",
-		"",
-	}
-)
-
-func (t *OpenShiftPatchTarget) containerConfigFilePath() (string, error) {
-	if t.target == "node" {
-		return t.containerConfigFile, nil
-	} else {
-		return t.containerConfigFile, nil
+func GetOpenShiftPatchTarget(target string) OpenShiftPatchTarget {
+	switch target {
+	case "master":
+		return OpenShiftPatchTarget{
+			"master",
+			getContainerConfigFile("master"),
+			getLocalConfigFile("master"),
+		}
+	case "node":
+		return OpenShiftPatchTarget{
+			"node",
+			getContainerConfigFile("node"),
+			getLocalConfigFile("node"),
+		}
+	case "kube":
+		return OpenShiftPatchTarget{
+			"kube",
+			getContainerConfigFile("kube"),
+			getLocalConfigFile("kube"),
+		}
+	default:
+		return OpenShiftPatchTarget{
+			"unkown",
+			"",
+			"",
+		}
 	}
 }
 
-func (t *OpenShiftPatchTarget) localConfigFilePath() (string, error) {
-	if t.target == "node" {
-		return t.localConfigFile, nil
-	} else {
-		return t.localConfigFile, nil
-	}
+func (t *OpenShiftPatchTarget) containerConfigFilePath() string {
+	return t.containerConfigFile
+}
+
+func (t *OpenShiftPatchTarget) localConfigFilePath() string {
+	return t.localConfigFile
 }
 
 func RestartOpenShift(commander docker.DockerCommander) (bool, error) {
-	fmt.Println("Restarting OpenShift")
-	ok, err := commander.Restart(constants.OpenshiftContainerName)
+	var (
+		ok  bool
+		err error
+	)
+	containerID, err := commander.GetID(minishiftConstants.OpenshiftApiContainerLabel)
 	if err != nil {
 		return false, err
 	}
-	return ok, nil
+	ok, err = commander.Stop(containerID)
+	if err != nil {
+		return false, err
+	}
+	containerID, err = commander.GetID(minishiftConstants.KubernetesApiContainerLabel)
+	if err != nil {
+		return false, err
+	}
+	ok, err = commander.Stop(containerID)
+	if err != nil {
+		return false, err
+	}
+	ok, err = commander.Restart(minishiftConstants.OpenshiftContainerName)
+	if err != nil {
+		return false, err
+	}
+	return ok, err
 }
 
 func Patch(target OpenShiftPatchTarget, patch string, commander docker.DockerCommander) (bool, error) {
-	fmt.Println(fmt.Sprintf("Patching OpenShift configuration %s with %s", target.containerConfigFile, patch))
+	fmt.Println(fmt.Sprintf("Patching OpenShift configuration '%s' with '%s'", target.localConfigFile, patch))
 
 	patchId, err := backUpConfig(target, commander)
 	if err != nil {
 		return false, err
 	}
 
-	containerConfigPath, err := target.containerConfigFilePath()
-	if err != nil {
-		return false, err
-	}
+	localConfigPath := target.localConfigFilePath()
 
-	patchCommand := fmt.Sprintf("ex config patch %s --patch='%s'", containerConfigPath, patch)
-	result, err := commander.Exec("-t", constants.OpenshiftContainerName, constants.OpenshiftExec, patchCommand)
+	patchCommand := fmt.Sprintf("ex config patch %s --patch='%s'", localConfigPath, patch)
+	cmd := fmt.Sprintf("%s/oc %s", minishiftConstants.OcPathInsideVM, patchCommand)
+
+	result, err := commander.LocalExec(cmd)
 	if err != nil {
 		glog.Error("Creating patched configuration failed. Not applying the changes.", err)
 		return false, nil
-
 	}
 
 	// Tweak the result configuration, we need to escape single quotes
@@ -120,7 +138,7 @@ func Patch(target OpenShiftPatchTarget, patch string, commander docker.DockerCom
 // IsRunning checks whether the origin container is in running state.
 // This method returns true if the origin container is running, false otherwise
 func IsRunning(commander docker.DockerCommander) bool {
-	status, err := commander.Status(constants.OpenshiftContainerName)
+	status, err := commander.Status(minishiftConstants.OpenshiftContainerName)
 	if err != nil || status != "running" {
 		return false
 	}
@@ -129,12 +147,30 @@ func IsRunning(commander docker.DockerCommander) bool {
 }
 
 func ViewConfig(target OpenShiftPatchTarget, commander docker.DockerCommander) (string, error) {
-	path, err := target.containerConfigFilePath()
+	path := target.containerConfigFilePath()
+	if target.target == "node" {
+		result, err := commander.Exec("-t", minishiftConstants.OpenshiftContainerName, "cat", path)
+		if err != nil {
+			return "", err
+		}
+		return result, nil
+	}
+	if target.target == "kube" {
+		containerID, err := commander.GetID(minishiftConstants.KubernetesApiContainerLabel)
+		if err != nil {
+			return "", err
+		}
+		result, err := commander.Exec("-t", containerID, "cat", path)
+		if err != nil {
+			return "", err
+		}
+		return result, nil
+	}
+	containerID, err := commander.GetID(minishiftConstants.OpenshiftApiContainerLabel)
 	if err != nil {
 		return "", err
 	}
-
-	result, err := commander.Exec("-t", constants.OpenshiftContainerName, "cat", path)
+	result, err := commander.Exec("-t", containerID, "cat", path)
 	if err != nil {
 		return "", err
 	}
@@ -144,20 +180,17 @@ func ViewConfig(target OpenShiftPatchTarget, commander docker.DockerCommander) (
 func rollback(target OpenShiftPatchTarget, commander docker.DockerCommander, patchId string) {
 	fmt.Println("Unable to restart OpenShift after patchting it. Rolling back.")
 	restoreConfig(target, patchId, commander)
-	commander.Restart(constants.OpenshiftContainerName)
+	commander.Restart(minishiftConstants.OpenshiftContainerName)
 	deleteBackup(target, patchId, commander)
 }
 
 func backUpConfig(target OpenShiftPatchTarget, commander docker.DockerCommander) (string, error) {
-	path, err := target.localConfigFilePath()
-	if err != nil {
-		return "", err
-	}
+	path := target.localConfigFilePath()
 
 	id := uuid.New()
 	backupCommand := fmt.Sprintf("sudo cp %s %s-%s", path, path, id)
 
-	_, err = commander.LocalExec(backupCommand)
+	_, err := commander.LocalExec(backupCommand)
 	if err != nil {
 		return "", err
 	}
@@ -166,14 +199,11 @@ func backUpConfig(target OpenShiftPatchTarget, commander docker.DockerCommander)
 }
 
 func restoreConfig(target OpenShiftPatchTarget, id string, commander docker.DockerCommander) error {
-	path, err := target.localConfigFilePath()
-	if err != nil {
-		return err
-	}
+	path := target.localConfigFilePath()
 
 	restoreCommand := fmt.Sprintf("sudo cp %s-%s %s", path, id, path)
 
-	_, err = commander.LocalExec(restoreCommand)
+	_, err := commander.LocalExec(restoreCommand)
 	if err != nil {
 		return err
 	}
@@ -182,15 +212,11 @@ func restoreConfig(target OpenShiftPatchTarget, id string, commander docker.Dock
 }
 
 func writeConfig(target OpenShiftPatchTarget, config string, commander docker.DockerCommander) error {
-	path, err := target.localConfigFilePath()
-	if err != nil {
-		return err
-	}
+	path := target.localConfigFilePath()
 
-	// TODO Figure out where the (meta) charcater 'M' comes from at the end of the line (HF)
-	writeCommand := fmt.Sprintf("sudo echo '%s' | sed 's/.$//' | sudo tee %s > /dev/null", config, path)
+	writeCommand := fmt.Sprintf("sudo echo '%s' | sudo tee %s > /dev/null", config, path)
 
-	_, err = commander.LocalExec(writeCommand)
+	_, err := commander.LocalExec(writeCommand)
 	if err != nil {
 		fmt.Println(err)
 		return err
@@ -200,17 +226,38 @@ func writeConfig(target OpenShiftPatchTarget, config string, commander docker.Do
 }
 
 func deleteBackup(target OpenShiftPatchTarget, id string, commander docker.DockerCommander) error {
-	path, err := target.localConfigFilePath()
-	if err != nil {
-		return err
-	}
+	path := target.localConfigFilePath()
 
-	backupDeleteCommand := fmt.Sprintf("sudo rm %s-%s", path, id)
+	backupDeleteCommand := fmt.Sprintf("sudo rm -f %s-%s", path, id)
 
-	_, err = commander.LocalExec(backupDeleteCommand)
+	_, err := commander.LocalExec(backupDeleteCommand)
 	if err != nil {
 		return err
 	}
 
 	return nil
+}
+
+func getLocalConfigFile(target string) string {
+	switch target {
+	case "master":
+		return "/var/lib/minishift/base/openshift-apiserver/master-config.yaml"
+	case "node":
+		return "/var/lib/minishift/base/node/node-config.yaml"
+	case "kube":
+		return "/var/lib/minishift/base/kube-apiserver/master-config.yaml"
+	}
+	return ""
+}
+
+func getContainerConfigFile(target string) string {
+	switch target {
+	case "master":
+		return "/etc/origin/master/master-config.yaml"
+	case "node":
+		return "/var/lib/origin/openshift.local.config/node/node-config.yaml"
+	case "kube":
+		return "/etc/origin/master/master-config.yaml"
+	}
+	return ""
 }

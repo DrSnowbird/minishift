@@ -17,6 +17,8 @@ limitations under the License.
 package config
 
 import (
+	"github.com/minishift/minishift/pkg/minikube/constants"
+	"github.com/minishift/minishift/pkg/minishift/config"
 	"github.com/minishift/minishift/pkg/util/os/atexit"
 	"github.com/spf13/cobra"
 )
@@ -30,7 +32,7 @@ These values can be overwritten by flags or environment variables at runtime.`,
 		if len(args) != 2 {
 			atexit.ExitWithMessage(1, "usage: minishift config set PROPERTY_NAME PROPERTY_VALUE")
 		}
-		err := set(args[0], args[1])
+		err := Set(args[0], args[1], true)
 		if err != nil {
 			atexit.ExitWithMessage(1, err.Error())
 		}
@@ -39,9 +41,10 @@ These values can be overwritten by flags or environment variables at runtime.`,
 
 func init() {
 	ConfigCmd.AddCommand(configSetCmd)
+	configSetCmd.Flags().BoolVar(&global, "global", false, "Sets the value of a configuration property in the global configuration file.")
 }
 
-func set(name string, value string) error {
+func Set(name string, value string, runCallback bool) error {
 	s, err := findSetting(name)
 	if err != nil {
 		return err
@@ -53,21 +56,27 @@ func set(name string, value string) error {
 	}
 
 	// Set the value
-	config, err := ReadConfig()
+	confFile := constants.ConfigFile
+	if global {
+		confFile = constants.GlobalConfigFile
+	}
+	conf, err := config.ReadViperConfig(confFile)
 	if err != nil {
 		return err
 	}
-	err = s.set(config, name, value)
+	err = s.set(conf, name, value)
 	if err != nil {
 		return err
 	}
 
-	// Run any callbacks for this property
-	err = run(name, value, s.callbacks)
-	if err != nil {
-		return err
+	if runCallback {
+		// Run any callbacks for this property
+		err = run(name, value, s.callbacks)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Write the value
-	return WriteConfig(config)
+	return config.WriteViperConfig(confFile, conf)
 }

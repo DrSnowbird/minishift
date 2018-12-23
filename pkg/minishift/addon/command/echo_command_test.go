@@ -17,55 +17,56 @@ limitations under the License.
 package command
 
 import (
-	"fmt"
 	"testing"
 
 	pkgTesting "github.com/minishift/minishift/pkg/testing"
+	"github.com/stretchr/testify/assert"
 )
 
 func Test_echo_command(t *testing.T) {
 	testCases := []struct {
 		echoCommand    string
 		expectedOutput string
+		ignoreError    bool
 	}{
 		{
 			echoCommand:    "echo hello world",
 			expectedOutput: "\nhello world",
+			ignoreError:    false,
 		},
 		{
 			echoCommand:    "echo    good\n bye", // 3 extrace spaces are preserved
 			expectedOutput: "\n   good\n bye",
+			ignoreError:    false,
 		},
 		{
 			echoCommand:    "echo",
 			expectedOutput: "\n",
+			ignoreError:    false,
 		},
 		{
 			echoCommand:    "echo ",
 			expectedOutput: "\n",
+			ignoreError:    false,
 		},
 		{
 			echoCommand:    "echo  ", // single additional space
 			expectedOutput: "\n ",
+			ignoreError:    false,
 		},
 	}
 
 	for _, test := range testCases {
 		tee, err := pkgTesting.NewTee(true)
 		defer tee.Close()
+		assert.NoError(t, err, "Error getting instance of Tee")
 
-		if err != nil {
-			t.Fatal("Unexpected error: " + err.Error())
-		}
-
-		echo := NewEchoCommand(test.echoCommand)
+		echo := NewEchoCommand(test.echoCommand, test.ignoreError)
 		context := &FakeInterpolationContext{}
 		echo.Execute(&ExecutionContext{interpolationContext: context})
 		tee.Close()
 
-		if tee.StdoutBuffer.String() != test.expectedOutput {
-			t.Fatal(fmt.Sprintf("Unexpected output to stdout. Expected '%s', but got '%s'", test.expectedOutput, tee.StdoutBuffer.String()))
-		}
+		assert.Equal(t, tee.StdoutBuffer.String(), test.expectedOutput)
 	}
 }
 

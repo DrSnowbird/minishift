@@ -19,8 +19,8 @@ package constants
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 
-	"github.com/minishift/minishift/pkg/util"
 	"github.com/minishift/minishift/pkg/version"
 )
 
@@ -29,15 +29,14 @@ const (
 	MiniShiftEnvPrefix               = "MINISHIFT"      // Prefix for the environmental variables
 	MiniShiftHomeEnv                 = "MINISHIFT_HOME" // Environment variable used to change the Minishift home directory
 	VersionPrefix                    = "v"
-	MinimumSupportedOpenShiftVersion = "v1.4.1"
-	MinimumOcBinaryVersion           = "v3.6.1" // For provisioning OpenShift versions < v3.7.0 , we need to use oc v3.6.1. Refer openshift/origin#17821
-	BackwardIncompatibleOcVersion    = "v3.7.0" // From v3.7.0 oc binary will not provision older versions of OpenShift instance. Refer #1417
-	DefaultMemory                    = "2GB"
+	MinimumSupportedOpenShiftVersion = "v3.10.0"
+	DefaultMemory                    = "4GB"
 	DefaultCPUS                      = 2
 	DefaultDiskSize                  = "20GB"
 	UpdateMarkerFileName             = "updated"
 	DefaultMachineName               = "minishift"
 	DefaultProfileName               = "minishift"
+	DefaultTimeZone                  = "UTC" // This is what we have in our ISO kickstart template.
 )
 
 var (
@@ -48,11 +47,10 @@ var (
 
 	KubeConfigPath        = filepath.Join(Minipath, "machines", MachineName+"_kubeconfig")
 	ConfigFile            = MakeMiniPath("config", "config.json")
+	GlobalConfigFile      = filepath.Join(Minipath, "config", "global.json")
 	AllInstanceConfigPath = filepath.Join(Minipath, "config", "allinstances.json")
 
-	DefaultB2dIsoUrl      = "https://github.com/minishift/minishift-b2d-iso/releases/download/" + version.GetB2dIsoVersion() + "/" + "minishift-b2d.iso"
-	DefaultCentOsIsoUrl   = "https://github.com/minishift/minishift-centos-iso/releases/download/" + version.GetCentOsIsoVersion() + "/" + "minishift-centos7.iso"
-	DefaultMinikubeIsoURL = "https://storage.googleapis.com/minikube/iso/minikube-" + version.GetMinikubeIsoVersion() + ".iso"
+	DefaultCentOsIsoUrl = "https://github.com/minishift/minishift-centos-iso/releases/download/" + version.GetCentOsIsoVersion() + "/" + "minishift-centos7.iso"
 )
 
 // MakeMiniPath is a utility to calculate a relative path to our directory.
@@ -69,7 +67,7 @@ func GetProfileHomeDir(profile string) string {
 		if ok {
 			return filepath.Join(homeEnv, "profiles", profile)
 		}
-		return filepath.Join(util.HomeDir(), ".minishift", "profiles", profile)
+		return filepath.Join(GetHomeDir(), ".minishift", "profiles", profile)
 	}
 	return GetMinishiftHomeDir()
 }
@@ -82,6 +80,24 @@ func GetMinishiftHomeDir() string {
 	if ok {
 		return homeEnv
 	} else {
-		return filepath.Join(util.HomeDir(), ".minishift")
+		return filepath.Join(GetHomeDir(), ".minishift")
 	}
+}
+
+// GetHomeDir returns the home directory for the current user
+func GetHomeDir() string {
+	if runtime.GOOS == "windows" {
+		if homeDrive, homePath := os.Getenv("HOMEDRIVE"), os.Getenv("HOMEPATH"); len(homeDrive) > 0 && len(homePath) > 0 {
+			homeDir := filepath.Join(homeDrive, homePath)
+			if _, err := os.Stat(homeDir); err == nil {
+				return homeDir
+			}
+		}
+		if userProfile := os.Getenv("USERPROFILE"); len(userProfile) > 0 {
+			if _, err := os.Stat(userProfile); err == nil {
+				return userProfile
+			}
+		}
+	}
+	return os.Getenv("HOME")
 }

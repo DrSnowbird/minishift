@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"github.com/asaskevich/govalidator"
 	"github.com/pkg/errors"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -38,20 +39,35 @@ type ProxyConfig struct {
 // NewProxyConfig creates a proxy configuration with the specified parameters. If a empty string is passed
 // the corresponding environment variable is checked.
 func NewProxyConfig(httpProxy string, httpsProxy string, noProxy string) (*ProxyConfig, error) {
-	if httpProxy == "" {
-		httpProxy = os.Getenv("HTTP_PROXY")
+	defaultScheme := "http"
+
+	// We only parse the Proxy Special char if it is coming from the config file
+	// or user defined flag. In case of Env variable we just ignore parsing.
+	if httpProxy != "" {
+		httpProxy = parseProxySpecialChar(httpProxy, defaultScheme)
+	}
+	if httpsProxy != "" {
+		httpsProxy = parseProxySpecialChar(httpsProxy, defaultScheme)
 	}
 
-	err := ValidateProxyURL(httpProxy)
+	if httpProxy == "" {
+		httpProxy = os.Getenv("http_proxy")
+		if httpProxy == "" {
+			httpProxy = os.Getenv("HTTP_PROXY")
+		}
+	}
+	err := ValidateProxyURL(httpProxy, defaultScheme)
 	if err != nil {
 		return nil, err
 	}
 
 	if httpsProxy == "" {
-		httpsProxy = os.Getenv("HTTPS_PROXY")
+		httpsProxy = os.Getenv("https_proxy")
+		if httpsProxy == "" {
+			httpsProxy = os.Getenv("HTTPS_PROXY")
+		}
 	}
-
-	err = ValidateProxyURL(httpsProxy)
+	err = ValidateProxyURL(httpsProxy, defaultScheme)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +76,10 @@ func NewProxyConfig(httpProxy string, httpsProxy string, noProxy string) (*Proxy
 	np = append(np, defaultNoProxies...)
 
 	if noProxy == "" {
-		noProxy = os.Getenv("NO_PROXY")
+		noProxy = os.Getenv("no_proxy")
+		if noProxy == "" {
+			noProxy = os.Getenv("NO_PROXY")
+		}
 	}
 
 	if noProxy != "" {
@@ -87,14 +106,27 @@ func (p *ProxyConfig) ProxyConfig() []string {
 
 	if p.httpProxy != "" {
 		config = append(config, fmt.Sprintf("HTTP_PROXY=%s", p.httpProxy))
+		config = append(config, fmt.Sprintf("http_proxy=%s", p.httpProxy))
 	}
 
 	if p.httpsProxy != "" {
 		config = append(config, fmt.Sprintf("HTTPS_PROXY=%s", p.httpsProxy))
+		config = append(config, fmt.Sprintf("https_proxy=%s", p.httpsProxy))
 	}
 	config = append(config, fmt.Sprintf("NO_PROXY=%s", p.NoProxy()))
+	config = append(config, fmt.Sprintf("no_proxy=%s", p.NoProxy()))
 
 	return config
+}
+
+// Override proxy for local/intermediate proxy
+func (p *ProxyConfig) OverrideHttpProxy(proxy string) {
+	p.httpProxy = proxy
+}
+
+// Override proxy for local/intermediate proxy
+func (p *ProxyConfig) OverrideHttpsProxy(proxy string) {
+	p.httpsProxy = proxy
 }
 
 // HttpProxy returns the configured value for the HTTP proxy. The empty string is returned in case HTTP proxy is not set.
@@ -129,11 +161,14 @@ func (p *ProxyConfig) ApplyToEnvironment() {
 
 	if p.httpProxy != "" {
 		os.Setenv("HTTP_PROXY", p.httpProxy)
+		os.Setenv("http_proxy", p.httpProxy)
 	}
 	if p.httpsProxy != "" {
 		os.Setenv("HTTPS_PROXY", p.httpsProxy)
+		os.Setenv("https_proxy", p.httpsProxy)
 	}
 	os.Setenv("NO_PROXY", p.NoProxy())
+	os.Setenv("no_proxy", p.NoProxy())
 }
 
 // Enabled returns true if at least one proxy (HTTP or HTTPS) is configured. Returns false otherwise.
@@ -141,14 +176,42 @@ func (p *ProxyConfig) IsEnabled() bool {
 	return p.httpProxy != "" || p.httpsProxy != ""
 }
 
-// validateProxyURL validates that the specified proxyURL is valid
-func ValidateProxyURL(proxyUrl string) error {
+// ValidateProxyURL validates that the specified proxyURL is valid
+func ValidateProxyURL(proxyUrl string, defaultScheme string) error {
 	if proxyUrl == "" {
 		return nil
+	}
+
+	if !strings.HasPrefix(proxyUrl, "http://") &&
+		!strings.HasPrefix(proxyUrl, "https://") {
+		proxyUrl = fmt.Sprintf("%s://%s", defaultScheme, proxyUrl)
 	}
 
 	if !govalidator.IsURL(proxyUrl) {
 		return errors.Errorf("Proxy URL '%s' is not valid.", proxyUrl)
 	}
 	return nil
+}
+
+// parseProxySpecialChar parse the URI and convert special char to hex
+func parseProxySpecialChar(proxyUrl string, defaultScheme string) string {
+	if proxyUrl == "" {
+		return ""
+	}
+
+	proxyUrl = strings.TrimSuffix(proxyUrl, "/")
+
+	if !strings.HasPrefix(proxyUrl, "http://") &&
+		!strings.HasPrefix(proxyUrl, "https://") {
+		proxyUrl = fmt.Sprintf("%s://%s", defaultScheme, proxyUrl)
+	}
+
+	u, _ := url.Parse(proxyUrl)
+	scheme := fmt.Sprintf("%s://", u.Scheme)
+	if strings.HasPrefix(proxyUrl, scheme) {
+		s := strings.Replace(proxyUrl, scheme, "", 1)
+		s = url.PathEscape(s)
+		return scheme + s
+	}
+	return ""
 }

@@ -19,21 +19,41 @@ package util
 import (
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/docker/machine/libmachine"
 	"github.com/docker/machine/libmachine/drivers"
+	"github.com/docker/machine/libmachine/host"
+	"github.com/docker/machine/libmachine/provision"
 	"github.com/docker/machine/libmachine/state"
 	"github.com/minishift/minishift/pkg/minikube/cluster"
+	"github.com/minishift/minishift/pkg/minishift/clusterup"
 	profileActions "github.com/minishift/minishift/pkg/minishift/profile"
 	"github.com/minishift/minishift/pkg/util/os/atexit"
 
+	configCmd "github.com/minishift/minishift/cmd/minishift/cmd/config"
 	cmdState "github.com/minishift/minishift/cmd/minishift/state"
 	"github.com/minishift/minishift/out/bindata"
 	"github.com/minishift/minishift/pkg/minikube/constants"
+	minishiftConstants "github.com/minishift/minishift/pkg/minishift/constants"
+	openshiftVersion "github.com/minishift/minishift/pkg/minishift/openshift/version"
+	"github.com/minishift/minishift/pkg/util/shell"
+	"github.com/minishift/minishift/pkg/version"
+	flag "github.com/spf13/pflag"
+	"github.com/spf13/viper"
 )
 
 var (
-	DefaultAssets = []string{"anyuid", "admin-user", "xpaas", "registry-route"}
+	DefaultAssets = []string{
+		"anyuid",
+		"admin-user",
+		"xpaas",
+		"registry-route",
+		"che",
+		"htpasswd-identity-provider",
+		"admissions-webhook",
+		"redhat-registry-login",
+	}
 )
 
 func VMExists(client *libmachine.Client, machineName string) bool {
@@ -68,7 +88,7 @@ func ExitIfNotRunning(driver drivers.Driver, machineName string) {
 
 func GetVMStatus(profileName string) string {
 	var status string
-	profileDirs := cmdState.NewMinishiftDirs(constants.GetProfileHomeDir(profileName))
+	profileDirs := cmdState.GetMinishiftDirsStructure(constants.GetProfileHomeDir(profileName))
 
 	api := libmachine.NewClient(profileDirs.Home, profileDirs.Certs)
 	defer api.Close()
@@ -109,6 +129,95 @@ func IsValidProfile(profileName string) bool {
 
 // IsValidProfileName return true if profile name follow ^[a-zA-Z0-9]+[\w+-]*$
 func IsValidProfileName(profileName string) bool {
-	rr := regexp.MustCompile(`^[a-zA-Z0-9]+[\w+-]*$`)
+	rr := regexp.MustCompile(`^[a-zA-Z0-9]+[a-zA-Z0-9-]*$`)
 	return rr.MatchString(profileName)
+}
+
+func GetNoProxyConfig(api libmachine.API) (string, string, error) {
+	host, err := api.Load(constants.MachineName)
+	if err != nil {
+		return "", "", fmt.Errorf("Error getting IP: %s", err)
+	}
+
+	ip, err := host.Driver.GetIP()
+	if err != nil {
+		return "", "", fmt.Errorf("Error getting host IP: %s", err)
+	}
+
+	noProxyVar, noProxyValue := shell.FindNoProxyFromEnv()
+
+	// Add the minishift VM to the no_proxy list idempotently.
+	switch {
+	case noProxyValue == "":
+		noProxyValue = ip
+	case strings.Contains(noProxyValue, ip):
+	// IP already in no_proxy list, nothing to do.
+	default:
+		noProxyValue = fmt.Sprintf("%s,%s", noProxyValue, ip)
+	}
+	return noProxyVar, noProxyValue, nil
+}
+
+func ValidateGenericDriverFlags(remoteIPAddress, remoteSSHUser, sshKeyToConnectRemote string) {
+	if remoteIPAddress == "" || remoteSSHUser == "" || sshKeyToConnectRemote == "" {
+		msg := fmt.Sprintf("Generic driver require additional information i.e. IP address of remote machine, path to ssh key and ssh username of the remote host.\n"+
+			"Provide following flags to use generic driver:\n"+
+			"--%s string\n--%s string\n--%s string\n", configCmd.RemoteIPAddress.Name, configCmd.RemoteSSHUser.Name, configCmd.SSHKeyToConnectRemote.Name)
+		atexit.ExitWithMessage(1, fmt.Sprintf("Error: %s", msg))
+	}
+}
+
+// OcClusterDown stop Openshift cluster using oc binary inside the remote machine
+func OcClusterDown(hostVm *host.Host) error {
+	sshCommander := provision.GenericSSHCommander{Driver: hostVm.Driver}
+	cmd := fmt.Sprintf("%s/oc cluster down", minishiftConstants.OcPathInsideVM)
+	_, err := sshCommander.SSHCommand(cmd)
+	return err
+}
+
+func GetOpenShiftReleaseVersion() (string, error) {
+	tag := viper.GetString(configCmd.OpenshiftVersion.Name)
+	// tag is in the form of vMajor.minor.patch e.g v3.9.0
+	if tag == fmt.Sprintf("%slatest", constants.VersionPrefix) {
+		tags, err := openshiftVersion.GetGithubReleases()
+		if err != nil {
+			return "", err
+		}
+
+		sortedtags, err := openshiftVersion.OpenShiftTagsByAscending(tags, constants.MinimumSupportedOpenShiftVersion, version.GetOpenShiftVersion())
+		if err != nil {
+			return "", err
+		}
+
+		return sortedtags[len(sortedtags)-1], nil
+	}
+
+	return tag, nil
+}
+
+// determineClusterUpParameters returns a map of flag names and values for the cluster up call.
+func DetermineClusterUpParameters(config *clusterup.ClusterUpConfig, DockerbridgeSubnet string, clusterUpFlagSet *flag.FlagSet) map[string]string {
+	clusterUpParams := make(map[string]string)
+	// Set default value for base config for 3.10
+	clusterUpParams["base-dir"] = minishiftConstants.BaseDirInsideInstance
+	if viper.GetString(configCmd.ImageName.Name) == "" {
+		imagetag := fmt.Sprintf("'%s:%s'", minishiftConstants.ImageNameForClusterUpImageFlag, config.OpenShiftVersion)
+		viper.Set(configCmd.ImageName.Name, imagetag)
+	}
+	// Add docker bridge subnet to no-proxy before passing to oc cluster up
+	if viper.GetString(configCmd.NoProxyList.Name) != "" {
+		viper.Set(configCmd.NoProxyList.Name, fmt.Sprintf("%s,%s", DockerbridgeSubnet, viper.GetString(configCmd.NoProxyList.Name)))
+	}
+
+	viper.Set(configCmd.RoutingSuffix.Name, config.RoutingSuffix)
+	viper.Set(configCmd.PublicHostname.Name, config.PublicHostname)
+	clusterUpFlagSet.VisitAll(func(flag *flag.Flag) {
+		if viper.IsSet(flag.Name) {
+			value := viper.GetString(flag.Name)
+			key := flag.Name
+			clusterUpParams[key] = value
+		}
+	})
+
+	return clusterUpParams
 }

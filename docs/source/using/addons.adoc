@@ -27,18 +27,27 @@ The following example shows the contents of an add-on file, including the name a
 # Description: Allows authenticated users to run images under a non pre-allocated UID   // <2>
 # Required-Vars: ACME_TOKEN                                                             // <3>
 # OpenShift-Version: >3.6.0                                                             // <4>
+# Minishift-Version: >1.22.0                                                            // <5>
 
-oc adm policy add-scc-to-group anyuid system:authenticated                              // <5>
+mytoken := oc sa get-token oauth-client                                                 // <6>
+
+oc new-app -p OPENSHIFT_OAUTH_CLIENT_SECRET=#{mytoken}                                  // <7>
+oc adm policy add-scc-to-group anyuid system:authenticated                              // <8>
 ----
 <1> (Required) Name of the add-on.
 <2> (Required) Description of the add-on.
 <3> (Optional) Comma separated list of required interpolation variables. See xref:../using/addons.adoc#addon-variable-interpolation[Variable Interpolation]
-<4> (Optional) OpenShift version required to run a specific add-on. See xref:../using/addons.adoc#addon-openshift-version-semantics[OpenShift Version Semantic]
-<5> Actual add-on command. In this case, the command executes the *oc* binary.
+<4> (Optional) OpenShift version required to run a specific add-on. See xref:../using/addons.adoc#addon-openshift-version-semantics[OpenShift Version Semantics]
+<5> (Optional) {project} version required to run a specific add-on. See xref:../using/addons.adoc#addon-minishift-version-semantics[Minishift Version Semantics]
+<5> Run an actual add-on command and store its output in a variable. See xref:../using/addons.adoc#internal-addon-variable[Internal Variable]
+<6> Actual add-on command. In this case, the command executes the *oc* binary using the `mytoken` variable value.
+<7> Actual add-on command. In this case, the command executes the *oc* binary.
 
 [NOTE]
 ====
-Comment lines, starting with the '#' character, can be inserted anywhere in the file.
+- Comment lines, starting with the '#' character, can be inserted anywhere in the file.
+- Command starting with `!` character ignores the execution failure.
+With the help of this, add-on will be idempotent i.e. a command can be executed multiple times without changing the final behavior of the add-on.
 ====
 
 Enabled add-ons are applied during xref:../command-ref/minishift_start.adoc#[`minishift start`], immediately after the initial cluster provisioning is successfully completed.
@@ -69,6 +78,51 @@ If the metadata field *OpenShift-Version* is not specified in the add-on header,
 *OpenShift-Version* only supports versions in the form of <major>.<minor>.<patch>.
 ====
 
+[[addon-minishift-version-semantics]]
+== Minishift-Version Semantics
+
+As part of the add-on metadata you can specify the Minishift version which needs to be running in order to apply the add-on.
+To do so, you can specify the optional *Minishift-Version* metadata field.
+The semantics are as follows:
+
+[cols="1,3"]
+|===
+| >1.22.0              | Minishift version higher than 1.22.0 needs to be running in order to apply the add-on.
+| >=1.22.0             | Minishift version 1.22.0 or higher needs to be running in order to apply the add-on.
+| 1.22.0               | Minishift version 1.22.0 needs to be running in order to apply the add-on.
+| >=1.21.0, <1.25.0    | Minishift version should higher or equal to 1.21.0 but lower than 1.25.0.
+| >=1.22.0, +<=1.25.0+ | Minishift version should higher or equal to 1.22.0 but lower or equal to 1.25.0.
+|===
+
+[NOTE]
+====
+If the metadata field *Minishift-Version* is not specified in the add-on header, the add-on can be applied against any version of {project}.
+====
+
+[NOTE]
+====
+*Minishift-Version* only supports versions in the form of <major>.<minor>.<patch>.
+====
+
+[[addon-defining-addon-dependencies]]
+== Defining Add-on Dependencies
+
+Add-on dependencies can be defined using the _Depends-On_ metadata field.
+Multiple dependencies may be defined using a comma-separated list of add-on names.
+
+[[example-addon-dependency]]
+.Example: Defining add-on dependency in add-on definition file
+
+----
+# Name: example
+# Description: Shows the use of Depends-On tag
+# Depends-On: anyuid, admin-user
+
+# This add-on depends on anyuid and admin-user add-on
+
+echo Depends on anyuid, admin-user add-on, and requires them to be installed
+----
+
 [[addon-commands]]
 == Add-on Commands
 
@@ -90,7 +144,7 @@ The `oc` command is executed as *system:admin*.
 ====
 
 openshift::
-If the add-on command starts with `openshift`, you can run the *openshift* binary within the container that runs OpenShift.
+If the add-on command starts with `openshift`, it uses the `oc` binary present in the OpenShift container to execute the command.
 This means that any file parameters or other system-specific parameters must match the environment of the container instead of your host.
 
 docker::
@@ -106,6 +160,11 @@ This can be used to provide additional feedback during add-on execution.
 sleep::
 If the add-on command starts with `sleep`, it waits for the specified number of seconds.
 This can be useful in cases where you know that a command such as `oc` might take a few seconds before a certain resource can be queried.
+
+cat::
+If the add-on command starts with `cat`, the arguments following the `cat` command should be a valid file path.
+This will print the file content to the console for valid file otherwise displays error message about the non-existence of file.
+This can be useful in case you want to use a file content with other command.
 
 [NOTE]
 ====
@@ -153,6 +212,9 @@ The following table shows these variables.
 
 |addon-name
 |Name of the current add-on.
+
+|user
+|User used by {project} for execution of commands through ssh.
 |===
 
 [[addon-dynamic-variables]]
@@ -186,7 +248,7 @@ $ minishift config set addon-env PROJECT_USER=env.USER        // <1>
 $ minishift addons apply acme                                 // <2>
 ----
 <1> Using the _env_ prefix ensures that instead of literally replacing '#{PROJECT_USER}' with 'env.USER', the value of the environment variable `USER` is used.
-If the environment variable is not set not, interpolation does not occur.
+If the environment variable is not set, interpolation does not occur.
 <2> When the add-on is applied, each occurrence of `#{PROJECT_USER}` within an add-on command gets replaced with the value of the environment variable `USER`.
 
 As an add-on developer, you can enforce that a variable value is provided when the add-on gets applied by adding the variable name to the _Required-Vars_ metadata header.
@@ -216,8 +278,31 @@ Multiple default key/value pairs need to be comma separated.
 
 [NOTE]
 ====
+Empty value will be set if NULL, Null or null specified as value for a _Var-Defaults key.
+
+# Var-Defaults: PROJECT_USER=null
+====
+
+[NOTE]
+====
 Variable values specified via the command line using the `--addon-env` or set via `minishift config set addon-env` have precedence over _Var-Defaults_.
 ====
+
+
+[[internal-addon-variable]]
+=== Internal Variables
+
+Add-on allows to define variables in an add-on.
+These variables can be used to store output of an xref:../using/addons.adoc#addon-commands[add-on command].
+
+For example, you can save a `oc` command output in a variable `mytoken` and use it in the subsequent add-on commands.
+
+example :
+----
+mytoken := oc sa get-token oauth-client
+oc new-app -p OPENSHIFT_OAUTH_CLIENT_SECRET=#{mytoken}
+----
+
 
 [[default-addons]]
 == Default Add-ons
@@ -255,9 +340,17 @@ By default, this is not allowed in OpenShift.
 | Creates a user named 'admin' and assigns the *cluster-admin* role to it.  
 | registry-route
 | Creates an edge terminated route for the OpenShift registry.
+| htpasswd-identity-provider
+| User can change and add default login username and password for the OpenShift instance.
+| admissions-webhook
+| Enables validating and mutating admission webhooks.
 
 | xpaas
 | Imports xPaaS templates.
+| redhat-registry-login
+| Creates secret to access images on registry.redhat.io.
+| che
+| Deploy che on the {project}.
 |===
 
 [[addons-by-community]]

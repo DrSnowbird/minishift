@@ -25,20 +25,23 @@ import (
 // AddOn is the internal representation of an AddOn including the addon metadata and the actual commands
 // the Addon consists off.
 type AddOn interface {
-	// GetMetaData returns the meta data of this addon.
+	// MetaData returns the meta data of this addon.
 	MetaData() AddOnMeta
+
+	// MetaDataForAddonRemove returns the meta data for this addon when remove subcommand used.
+	MetaDataForAddonRemove() AddOnMeta
 
 	// Commands returns a Command slice of the commands this addon consists of.
 	Commands() []command.Command
 
-	// RemoveCommands returns a Command slice of the commands which use for remove this addon.
+	// RemoveCommands returns a slice of the commands which are used to remove this addon.
 	RemoveCommands() []command.Command
 
 	// InstallPath returns the path under which the addon is installed.
 	InstallPath() string
 
 	// IsEnabled returns true, if this addon is currently enabled and getting applied as part of OpenShift
-	// provisioning. Returns false, is this addon is not enabled.
+	// provisioning. Returns false, if this addon is not enabled.
 	IsEnabled() bool
 
 	// SetEnabled sets this addon as en- or disabled.
@@ -56,20 +59,22 @@ type AddOn interface {
 type DefaultAddOn struct {
 	AddOn
 
-	metaData       AddOnMeta
-	commands       []command.Command
-	removeCommands []command.Command
-	enabled        bool
-	path           string
-	priority       int
+	metaData               AddOnMeta
+	metaDataForAddonRemove AddOnMeta
+	commands               []command.Command
+	removeCommands         []command.Command
+	enabled                bool
+	path                   string
+	priority               int
 }
 
-func NewAddOn(meta AddOnMeta, commands []command.Command, removeCommands []command.Command, path string) AddOn {
+func NewAddOn(meta AddOnMeta, metaDataForAddonRemove AddOnMeta, commands []command.Command, removeCommands []command.Command, path string) AddOn {
 	addOn := DefaultAddOn{
-		metaData:       meta,
-		commands:       commands,
-		removeCommands: removeCommands,
-		path:           path,
+		metaData:               meta,
+		metaDataForAddonRemove: metaDataForAddonRemove,
+		commands:               commands,
+		removeCommands:         removeCommands,
+		path:                   path,
 	}
 	return &addOn
 }
@@ -84,6 +89,10 @@ func (a *DefaultAddOn) RemoveCommands() []command.Command {
 
 func (a *DefaultAddOn) MetaData() AddOnMeta {
 	return a.metaData
+}
+
+func (a *DefaultAddOn) MetaDataForAddonRemove() AddOnMeta {
+	return a.metaDataForAddonRemove
 }
 
 func (a *DefaultAddOn) IsEnabled() bool {

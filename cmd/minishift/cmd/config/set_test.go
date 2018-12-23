@@ -17,27 +17,25 @@ limitations under the License.
 package config
 
 import (
-	"github.com/minishift/minishift/cmd/minishift/state"
-	"github.com/minishift/minishift/pkg/minikube/constants"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/minishift/minishift/cmd/minishift/state"
+	"github.com/minishift/minishift/pkg/minikube/constants"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestNotFound(t *testing.T) {
-	err := set("nonexistant", "10")
-	if err == nil {
-		t.Fatal("Set did not return error for unknown property")
-	}
+	err := Set("nonexistant", "10", true)
+	assert.Error(t, err, "Set did not return error for unknown property")
 }
 
 func TestModifyData(t *testing.T) {
 	testDir, err := ioutil.TempDir("", "minishift-config-")
-	if err != nil {
-		t.Error()
-	}
-	state.InstanceDirs = state.NewMinishiftDirs(testDir)
+	assert.NoError(t, err, "Error creating temp directory")
+	state.InstanceDirs = state.GetMinishiftDirsStructure(testDir)
 
 	constants.ConfigFile = filepath.Join(testDir, "config.json")
 	defer os.RemoveAll(testDir)
@@ -54,27 +52,17 @@ func TestModifyData(t *testing.T) {
 
 func verifyStoredValue(t *testing.T, key string, expectedValue string) {
 	actualValue, err := get(key)
-	if err != nil {
-		t.Fatalf("Error getting value %s", err)
-	}
-	if actualValue != expectedValue {
-		t.Fatalf("Unexpexted value in confif. Expected '%s'. Got '%s'.", expectedValue, actualValue)
-	}
+	assert.NoError(t, err, "Unexpexted value in config")
+	assert.Equal(t, expectedValue, actualValue)
 }
 
 func verifyValueUnset(t *testing.T, key string) {
 	actualValue, err := get(key)
-	if err != nil {
-		t.Fatalf("Error getting value %s", err)
-	}
-	if actualValue != "<nil>" {
-		t.Fatalf("Expexted '<nil>' value. Got '%s'.", actualValue)
-	}
+	assert.NoError(t, err, "Error getting value")
+	assert.Equal(t, "<nil>", actualValue)
 }
 
 func persistValue(t *testing.T, key string, value string) {
-	err := set(key, value)
-	if err != nil {
-		t.Fatalf("Error setting value %s", err)
-	}
+	err := Set(key, value, true)
+	assert.NoError(t, err, "Error setting value")
 }

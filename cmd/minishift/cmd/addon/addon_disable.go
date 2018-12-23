@@ -19,13 +19,14 @@ package addon
 import (
 	"fmt"
 
+	minishiftConfig "github.com/minishift/minishift/pkg/minishift/config"
 	"github.com/minishift/minishift/pkg/util/os/atexit"
 	"github.com/spf13/cobra"
 )
 
 const (
-	emptyDisableError           = "You must specify an add-on name. Run `minishift addons list` to view installed add-ons."
-	noAddOnToDisableMessage     = "No add-on with the name %s is installed."
+	emptyDisableError           = "You must specify an add-on name. Run 'minishift addons list' to view installed add-ons."
+	noAddOnToDisableMessage     = "No add-on with the name '%s' is installed."
 	addOnAlreadyDisabledMessage = "Add-on '%s' is already disabled."
 )
 
@@ -58,12 +59,13 @@ func runDisableAddon(cmd *cobra.Command, args []string) {
 
 	addOnConfig, err := addOnManager.Disable(addOnName)
 	if err != nil {
-		atexit.ExitWithMessage(1, fmt.Sprintf("Unable to disable the add-on %s: %s", addOnName, err.Error()))
+		atexit.ExitWithMessage(1, fmt.Sprintf("Unable to disable the add-on '%s': %s", addOnName, err.Error()))
 	} else {
 		fmt.Println(fmt.Sprintf("Add-on '%s' disabled", addOnName))
 	}
 
-	addOnConfigMap := GetAddOnConfiguration()
-	addOnConfigMap[addOnConfig.Name] = addOnConfig
-	WriteAddOnConfig(addOnConfigMap)
+	minishiftConfig.InstanceConfig.AddonConfig[addOnConfig.Name] = addOnConfig
+	if err := minishiftConfig.InstanceConfig.Write(); err != nil {
+		atexit.ExitWithMessage(1, fmt.Sprintf("Error writing addon config data: %v", err))
+	}
 }

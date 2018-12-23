@@ -20,7 +20,7 @@ When you use {project}, you interact with the following components:
 
 The xref:../using/basic-usage.adoc#diagram-minishift-architecture[{project} architecture] diagram outlines these components.
 The `minishift` binary, placed on the `PATH` for easy execution, is used to xref:../using/basic-usage.adoc#minishift-start-overview[`start`], xref:../using/basic-usage.adoc#minishift-stop-overview[`stop`] and xref:../using/basic-usage.adoc#minishift-delete-overview[`delete`] the {project} VM.
-The VM itself is bootstrapping off a xref:../using/basic-usage.adoc#choosing-iso-image[pluggable] Live ISO.
+The VM itself is bootstrapped off of a xref:../using/choosing-iso-image.adoc#[pluggable, live ISO image].
 
 Some {project} commands, for example xref:../using/docker-daemon.adoc#[`docker-env`], interact with the Docker daemon, whilst others communicate with the OpenShift cluster, for example the xref:../command-ref/minishift_openshift.adoc#[`openshift`] command.
 
@@ -33,41 +33,7 @@ For more details about using {project} to manage your local OpenShift cluster, s
 [[diagram-minishift-architecture]]
 .: Minishift architecture
 
-[ditaa, "minishift-architecture"]
-----
-
- host machine
- +-------------------------------------------------------------------------------------+
- |                      /-------------> Minishift VM                                   |
- |                      |                                                              |
- |                      |         /--->  o boots from pluggable Live ISO               |
- | $PATH                |         |      o runs on VirtualBox, HyperV, xhyve or KVM    |
- | └── minishift -=-----|         |                                                    |
- |                      |         |   /------------------------------------------\     |
- |                      |         |   |c1AB                                      |     |
- |                      |-=-------|=--|-=->  Docker                              |     |
- |                      :         |   |   /-----------------------------\        |     |
- |                      |         |   |   | c1FF                        |        |     |
- |~/.minishift/         \-=-------|=--|-=-|-=---> OpenShift             |        |     |
- | |                              |   |   |  |  /-------------------\   |        |     |
- | +-- cache                      |   |   |  |  |                   |   |        |     |
- |     |                          |   |   |  |  | master   node     |   |        |     |
- |     +-- iso                    |   |   |  |  | +-----+  +-----+  |   |        |     |
- |     |   |                      |   |   |  |  | | {d} |  | {d} |  |   |        |     |
- |     |   +-- minishift_b2d.iso -/   |   |  |  | |     |  |     |  |   |        |     |
- |     |                              |   |  |  | |     |  |     |  |   |        |     |
- |     +-- oc                         |   |  |  | |     |  |     |  |   |        |     |
- |         |                          |   |  |  | |     |  |     |  |   |        |     |
- |         +-- v3.6.0                 |   |  |  | |     |  |     |  |   |        |     |
- |             |                      |   |  |  | |     |  |     |  |   |        |     |
- |             +-- oc  -=-------------|-=-|-=+  | +-----+  +-----+  |   |        |     |
- |                                    |   |     \-------------------/   |        |     |
- |                                    |   \-----------------------------/        |     |
- |                                    \------------------------------------------/     |
- |                                                                                     |
- +-------+-----------------------------------------------------------------------------+
-
-----
+image::minishift-architecture.png[Minishift architecture]
 
 [[minishift-life-cycle]]
 == {project} Life-cycle
@@ -95,73 +61,6 @@ For details, see the GitHub issue link:https://github.com/minishift/minishift/is
 
 The xref:../command-ref/minishift_delete.adoc#[`minishift delete`] command deletes the OpenShift cluster, and also shuts down and deletes the {project} VM.
 No data or state are preserved.
-
-[[choosing-iso-image]]
-== Choosing the ISO Image
-
-When you start {project}, it downloads a live ISO image that the hypervisor uses to provision the {project} VM.
-
-The following ISO images are available:
-
-- link:https://github.com/minishift/minishift-b2d-iso/releases[{project} Boot2Docker] (Default).
-This ISO image is based on link:https://github.com/boot2docker/boot2docker[Boot2Docker], which is a lightweight Linux distribution customized to run Docker containers.
-The image size is small and optimized for development but not for production.
-
-- link:https://github.com/minishift/minishift-centos-iso/releases[{project} CentOS].
-This ISO image is based on link:https://www.centos.org/[CentOS], which is an enterprise-ready Linux distribution that more closely resembles a production environment.
-The image size is larger than the Boot2Docker ISO image.
-
-- link:https://github.com/kubernetes/minikube/tree/master/deploy/iso/minikube-iso[minikube ISO].
-This ISO image is provided by link:https://github.com/kubernetes/minikube/[Minikube project]. It is a customized Linux and based on link:https://www.kernel.org/[upstream kernel].
-Minikube ISO image also provides alternate container runtime e.g. cri-o and rkt along with docker.
-Please check link:https://github.com/kubernetes/minikube/blob/master/docs/contributors/minikube_iso.md[Minikube documentation] for details.
-
-[NOTE]
-====
-Minikube ISO image use is experimental in {project}. Work is in progress to make it as stable as CentOS and Boot2Docker ISO images.
-====
-
-By default, {project} uses the {project} Boot2Docker ISO image.
-To choose the {project} CentOS ISO image instead, you can do one of the following:
-
-- Use the *centos* alias to download and use the latest CentOS ISO:
-+
-----
-$ minishift start --iso-url centos
-----
-
-- Specify explicitly the download URL of the {project} CentOS ISO image. For example:
-+
-[subs="attributes"]
-----
-$ minishift start --iso-url https://github.com/minishift/minishift-centos-iso/releases/download/{centos-iso-version}/minishift-centos7.iso
-----
-
-- Manually download the {project} CentSO ISO image from the link:https://github.com/minishift/minishift-centos-iso/releases[releases page] and enter the file URI to the image:
-
-[NOTE]
-====
-The path given for a file URI must be an absolute path.
-====
-- On Linux or macOS, the path must begin with *_/_*.
-For example:
-+
-----
-$ minishift start --iso-url file:///path/to/image.iso
-----
-
-- On Windows, the path must begin with a drive letter (*_C:_*, *_D:_*).
-For example:
-+
-----
-C:\> minishift.exe start --iso-url file://c:/path/to/image.iso
-----
-
-[NOTE]
-====
-You cannot run {project} with both ISO images concurrently.
-To switch between ISO images, delete the {project} instance and start a new instance with the ISO image that you want to use.
-====
 
 [[runtime-options]]
 == Runtime Options
@@ -211,14 +110,23 @@ This environment variable is currently experimental and semantics might change i
 === Persistent Configuration
 
 Using persistent configuration allows you to control {project} behavior without specifying actual command line flags, similar to the way you use environment variables.
+You can also define global configuration using `--global` flag.
+Global configuration is applicable to all profiles.
 
 {project} maintains a configuration file in *_$MINISHIFT_HOME/config/config.json_*.
-This file can be used to set commonly-used command line flags persistently.
+This file can be used to set commonly-used command line flags persistently for individual profiles.
+{The global configuration file is maintained at *_$MINISHIFT_HOME/config/global.json_*.
+
 
 [NOTE]
 ====
 Persistent configuration can only be applied to the set of supported configuration options that are listed in the synopsis of the xref:../command-ref/minishift_config.adoc#[`minishift config`] sub-command.
 This is different from environment variables, which can be used to replace any option of any command.
+====
+
+[NOTE]
+====
+By Default minishift persist start flags to peristent configuration, to disable it, use `minishift config set save-start-flags false`.
 ====
 
 [[setting-persistent-configuration-values]]
@@ -230,6 +138,13 @@ For example:
 ----
 # Set default memory 4096 MB
 $ minishift config set memory 4096
+----
+
+The easiest way to set a persistent configuration option across all profiles is with the xref:../command-ref/minishift_config_set.adoc#[`minishift config set --global`] sub-command.
+
+For example, you can set the default memory to 8192 MB for every profile as follows:
+----
+$ minishift config set --global memory 8192
 ----
 
 Flags which can be used multiple times per command invocation, like `docker-env` or `insecure-registry`, need to be comma-separated when used with the `config set` command.
@@ -252,6 +167,13 @@ $ minishift config view
 - memory: 4096
 ----
 
+To view all persistent configuration values in the global configuration file, you can use the xref:../command-ref/minishift_config_view.adoc#[`minishift config view --global`] sub-command:
+
+----
+$ minishift config view --global
+- memory: 8192
+----
+
 Alternatively, you can display a single value with the xref:../command-ref/minishift_config_get.adoc#[`minishift config get`] sub-command:
 
 ----
@@ -269,35 +191,21 @@ For example:
 $ minishift config unset memory
 ----
 
-[[driver-specific-environment-variables]]
-=== Driver-Specific Environment Variables
-
-You can also set driver-specific environment variables.
-Each Docker Machine driver supports its own set of options and variables.
-A good starting point is the official Docker Machine link:https://docs.docker.com/machine/drivers/[driver documentation].
-
-xhyve and KVM documentation is available under their respective GitHub repository link:https://github.com/zchee/docker-machine-driver-xhyve[docker-machine-driver-xhyve] and https://github.com/dhiltgen/docker-machine-kvm[docker-machine-kvm].
-
-To use driver-specific options, make sure to export the variable as defined in its driver documentation before running xref:../command-ref/minishift_start.adoc#[`minishift start`].
-For example, the xhyve experimental NFS sharing can be enabled by executing:
-
-----
-$ export XHYVE_EXPERIMENTAL_NFS_SHARE=true
-$ minishift start --vm-driver xhyve
-----
-
-[CAUTION]
+[NOTE]
 ====
-Driver-specific options might overlap with values specified using {project}-specific flags and environment variables.
-Examples are boot2docker URL, memory size, cpu count, and so on.
-In this case, driver-specific environment variables will override {project}-specific settings.
+The precedence for user-defined values is as follows:
+
+. Command line flags.
+. Environment variable.
+. Instance-specific configuration.
+. Global configuration.
 ====
 
 [[persistent-volumes]]
 == Persistent Volumes
 
-As part of the OpenShift cluster provisioning, 100 link:https://docs.openshift.org/latest/dev_guide/persistent_volumes.html[persistent volumes] are created for your OpenShift cluster.
-This allows applications to make link:https://docs.openshift.org/latest/dev_guide/persistent_volumes.html#persistent-volumes-claims-as-volumes-in-pods[persistent volumes claims].
+As part of the OpenShift cluster provisioning, 100 link:https://docs.okd.io/latest/dev_guide/persistent_volumes.html[persistent volumes] are created for your OpenShift cluster.
+This allows applications to make link:https://docs.okd.io/latest/dev_guide/persistent_volumes.html#persistent-volumes-claims-as-volumes-in-pods[persistent volumes claims].
 The location of the persistent data is determined in the `host-pv-dir` flag of the xref:../command-ref/minishift_start.adoc#[`minishift start`] command and defaults to *_/var/lib/minishift/openshift.local.pv_* on the {project} VM.
 
 [[http-s-proxies]]
@@ -326,11 +234,11 @@ Using the proxy options will transparently configure the Docker daemon as well a
 [NOTE]
 ====
 - `minishift start` honors the environment variables `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`.
+The environment variables can be specified in lower case or upper case.
+The lower case variables take higher precedence over upper case variables.
 If these variables are set, they are implicitly used during `minishift start` unless explicitly overridden by the corresponding command line flags.
 
-- Using the proxy options requires that you run OpenShift version 1.5.0 or later.
-Use the `openshift-version` option to request a specific version of OpenShift.
-You can list all {project}-compatible OpenShift versions with the xref:../command-ref/minishift_openshift_version_list.adoc#[`minishift openshift version list`] command.
+- Minishift does not escape the special characters in the environment variables for proxy so user need to escape special characters manually to get it working.
 ====
 
 [[networking]]

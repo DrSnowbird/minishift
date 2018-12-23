@@ -1,0 +1,18 @@
+# Name: che
+# Description: Remove add on
+# Url: https://www.eclipse.org/che/docs/openshift-single-user.html
+# Required-Vars: NAMESPACE
+# Var-Defaults: NAMESPACE=mini-che
+
+echo [CHE] Removing Che server Template
+oc delete -f templates/che-server-template.yaml -n openshift
+oc delete -f templates/che-workspace-service-account.yaml -n openshift
+
+echo [CHE] Removing #{NAMESPACE} project
+
+oc delete all -l app=che -n #{NAMESPACE}
+oc delete pvc che-data-volume claim-che-workspace --ignore-not-found -n #{NAMESPACE}
+oc adm policy remove-role-from-user admin developer -n #{NAMESPACE}
+oc delete project #{NAMESPACE} --ignore-not-found
+
+echo Eclipse Che addon removed

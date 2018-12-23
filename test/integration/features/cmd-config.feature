@@ -1,18 +1,19 @@
-@cmd-config @command
+@cmd-config @core
 Feature: Minishift config subcommands
 Commands `minishift config [sub-command]` are used for storing
 user defined options which changes default behaviour of Minishift.
 
-  @minishift-only
+  @minishift-only @quick
   Scenario: Config is empty
     Given Minishift has state "Does Not Exist"
      Then executing "minishift config view" succeeds
       And stdout should be empty
 
-  Scenario Outline: Setting values in bad range or format
-  Minishift config set should not set a value, if this value is of bad format or in bad range.
+  @quick
+  Scenario Outline: Setting values in wrong range or format
+  Minishift config set should not set a value, if this value is of wrong format or in wrong range.
      When executing "minishift config set <property> <value>" fails
-     Then JSON config file "config/config.json" does not contain key "<property>" with value matching "<value>"
+     Then JSON config file ".minishift/config/config.json" does not contain key "<property>" with value matching "<value>"
       And stdout of command "minishift config get <property>" is equal to "<nil>"
 
   Examples: Wrong values for unit based keys
@@ -27,9 +28,9 @@ user defined options which changes default behaviour of Minishift.
 
   Examples: Wrong values for boolean keys
     | property            | value      |
-    | logging             | TRuE       |
-    | metrics             | positive   |
-    | metrics             | yes        |
+    | skip-registration   | TRuE       |
+    | skip-registry-check | positive   |
+    | skip-registration   | yes        |
     | skip-registry-check | fAlse      |
     | skip-registration   | -- -1      |
     | skip-registry-check | 11         |
@@ -70,14 +71,15 @@ user defined options which changes default behaviour of Minishift.
     | host-only-cidr  | 192.168.1.1                    |
     | host-only-cidr  | notacidr                       |
 
+  @quick
   Scenario Outline: Setting and unsetting with correct values
       When executing "minishift config set <property> "<value>"" succeeds
-      Then JSON config file "config/config.json" contains key "<property>" with value matching "<expected>"
+      Then JSON config file ".minishift/config/config.json" contains key "<property>" with value matching "<expected>"
        And stdout of command "minishift config get <property>" is equal to "<expected>"
        And stdout of command "minishift config view --format {{.ConfigKey}}:{{.ConfigValue}}" contains "<property>:<expected>"
       When executing "minishift config unset <property>" succeeds
       Then stdout of command "minishift config get <property>" is equal to "<nil>"
-       And JSON config file "config/config.json" does not have key "<property>"
+       And JSON config file ".minishift/config/config.json" does not have key "<property>"
 
   Examples: Correct values for unit based keys
     | property  | value   | expected |
@@ -102,19 +104,19 @@ user defined options which changes default behaviour of Minishift.
 
    Examples: Correct values for boolean keys
     | property            | value      | expected |
-    | logging             | true       | true     |
-    | logging             | True       | true     |
-    | logging             | TRUE       | true     |
-    | logging             | t          | true     |
-    | logging             | T          | true     |
-    | logging             | 1          | true     |
-    | metrics             | false      | false    |
-    | metrics             | False      | false    |
-    | metrics             | FALSE      | false    |
-    | metrics             | f          | false    |
-    | metrics             | F          | false    |
-    | metrics             | 0          | false    |
-    | metrics             | f          | false    |
+    | skip-registration   | true       | true     |
+    | skip-registry-check | True       | true     |
+    | skip-registration   | TRUE       | true     |
+    | skip-registry-check | t          | true     |
+    | skip-registration   | T          | true     |
+    | skip-registry-check | 1          | true     |
+    | skip-registration   | false      | false    |
+    | skip-registry-check | False      | false    |
+    | skip-registration   | FALSE      | false    |
+    | skip-registry-check | f          | false    |
+    | skip-registration   | F          | false    |
+    | skip-registry-check | 0          | false    |
+    | skip-registration   | f          | false    |
     | skip-registry-check | true       | true     |
     | skip-registration   | false      | false    |
     | skip-registry-check | True       | true     |
@@ -158,32 +160,41 @@ user defined options which changes default behaviour of Minishift.
     | host-only-cidr  | 192.168.0.1/0                                                                                   | 192.168.0.1/0                                                                                   |
     | host-only-cidr  | 192.168.0.1/16                                                                                  | 192.168.0.1/16                                                                                  |
 
-  @minishift-only
+  @minishift-only @quick
   Scenario Outline: Setting and unsetting values for iso-url key
      When executing "minishift config set <property> "<value>"" succeeds
-     Then JSON config file "config/config.json" contains key "<property>" with value matching "<expected>"
+     Then JSON config file ".minishift/config/config.json" contains key "<property>" with value matching "<expected>"
       And stdout of command "minishift config get <property>" is equal to "<expected>"
       And stdout of command "minishift config view --format {{.ConfigKey}}:{{.ConfigValue}}" contains "<property>:<expected>"
      When executing "minishift config unset <property>" succeeds
      Then stdout of command "minishift config get <property>" is equal to "<nil>"
-      And JSON config file "config/config.json" does not have key "<property>"
+      And JSON config file ".minishift/config/config.json" does not have key "<property>"
 
   Examples: Correct values for iso-url keys
-    | property        | value                                                                                           | expected                                                                                        |
-    | iso-url         | https://github.com/minishift/minishift-b2d-iso/releases/download/v1.1.0/minishift-b2d.iso       | https://github.com/minishift/minishift-b2d-iso/releases/download/v1.1.0/minishift-b2d.iso       |
-    | iso-url         | http://github.com/minishift/minishift-centos-iso/releases/download/v1.1.0/minishift-centos7.iso | http://github.com/minishift/minishift-centos-iso/releases/download/v1.1.0/minishift-centos7.iso |
-    | iso-url         | file://home/me/Downloads/my_handmade_b2d.iso                                                    | file://home/me/Downloads/my_handmade_b2d.iso                                                    |
-    | iso-url         | b2d                                                                                             | b2d                                                                                             |
-    | iso-url         | centos                                                                                          | centos                                                                                          |
-
+    | property        | value                                                                                            | expected                                                                                        |
+    | iso-url         | https://github.com/minishift/minishift-b2d-iso/releases/download/v1.1.0/minishift-b2d.iso        | https://github.com/minishift/minishift-b2d-iso/releases/download/v1.1.0/minishift-b2d.iso       |
+    | iso-url         | http://github.com/minishift/minishift-centos-iso/releases/download/v1.1.0/minishift-centos7.iso  | http://github.com/minishift/minishift-centos-iso/releases/download/v1.1.0/minishift-centos7.iso |
+    | iso-url         | centos                                                                                           | centos                                                                                          |
+       
+  @quick
+  Scenario: Setting iso-url key to a non existing path
+     When executing "minishift config set iso-url file:///home/Downloads/my_handmade_centos.iso" fails
+     Then stderr should contain
+      """
+      'file:///home/Downloads/my_handmade_centos.iso' file is not present
+      """
+	
+  @quick
   Scenario: Unsetting non-existing key
      When executing "minishift config unset i-do-not-exist" succeeds
      Then exitcode should equal "0"
 
+  @quick
   Scenario: Getting non-existing key
      When executing "minishift config get does-not-exist"
      Then stdout should contain "<nil>"
 
+  @quick
   Scenario Outline: Setting values, getting values and keeping them
   Setting values, not unsetting them so they will be used on next Minishift start.
   Not every key possible is being tested only those which are less complicated,
@@ -195,34 +206,38 @@ user defined options which changes default behaviour of Minishift.
     | property          | value              | expected             |
     | memory            | 3500               | 3500                 |
     | disk-size         | 25g                | 25g                  |
-    | cpus              | 3                  | 3                    |
     | docker-env        | FOO=BAR,hello=hi   | [FOO=BAR hello=hi]   |
     | docker-opt        | dns=8.8.8.8        | [dns=8.8.8.8]        |
-    | insecure-registry | test-registry:5000 | [test-registry:5000] |
+
+  @quick
+  Scenario Outline: Globally Setting values, getting values and keeping them
+  Setting values, not unsetting them so they will be used on next Minishift start.
+  Not every key possible is being tested only those which are less complicated,
+  for example the http-proxy key is being tested in separate feature file.
+    When executing "minishift config set --global <property> "<value>"" succeeds
+    Then stdout of command "minishift config get --global <property>" is equal to "<expected>"
+
+    Examples: Values to be used on next Minishift start
+      | property          | value              | expected             |
+      | memory            | 4200               | 4200                 |
+      | disk-size         | 40g                | 40g                  |
+      | cpus              | 3                  | 3                    |
+      | docker-env        | HI=BYE,hello=hi    | [HI=BYE hello=hi]    |
+      | docker-opt        | dns=1.1.1.1        | [dns=1.1.1.1]        |
+      | insecure-registry | test-registry:5000 | [test-registry:5000] |
 
   Scenario: Minishift informs about starting with correct setup of memory, disk and CPU
   Note: Minishift rounds the values for the report to make it more readable.
         However original non-rounded values are used for the startup.
+    Given Minishift has state "Does Not Exist"
+      And image caching is disabled
      When executing "minishift start" succeeds
      Then stdout should match "Memory\s*:\s*3 GB"
      Then stdout should match "Disk size\s*:\s*25 GB"
      Then stdout should match "vCPUs\s*:\s*3"
       And Minishift should have state "Running"
-
-  Scenario: Checking that memory value was applied
-     When executing "minishift ssh -- less /proc/meminfo" succeeds
-     Then stdout should match "MemTotal:\s*3[4-5][0-9]{5} kB"
-
-  Scenario: Checking that disk-size value was applied
-     When executing "minishift ssh -- sudo fdisk -l | grep Disk" succeeds
-     Then stdout should match "Disk \/dev\/sda: 2[4-6]\.?[0-9]{0,2} (GB|GiB)"
-
-  Scenario: Checking that cpus value was applied
-     When executing "minishift ssh -- cat /proc/cpuinfo" succeeds
-     Then stdout should match "processor\s*: 0"
-      And stdout should match "processor\s*: 1"
-      And stdout should match "processor\s*: 2"
-      And stdout should not match "processor\s*: [3-9]"
+      And Minishift VM should run with "3" vCPUs
+      And Minishift VM should run within "25" to "27" GB of disk size
 
   Scenario: Checking that docker-env value was applied
      When printing Docker daemon configuration to stdout
@@ -240,3 +255,25 @@ user defined options which changes default behaviour of Minishift.
   Scenario: Deleting Minishift instance
      When executing "minishift delete --force" succeeds
      Then Minishift should have state "Does Not Exist"
+
+  Scenario: Minishift should preserve start flags when started with non-defaults parameters.
+    Given Minishift has state "Does Not Exist"
+      And image caching is disabled
+     When executing "minishift start --memory 5000 --disk-size 30g --cpus 2 --docker-env FOO=BAR --docker-opt dns=8.8.8.8 --insecure-registry foo.bar:5000" succeeds
+
+  Scenario Outline: Check the config flag values
+     When Minishift should have state "Running"
+     Then stdout of command "minishift config get <property>" is equal to "<value>"
+
+      Examples: Correct value show in the config
+        | property          | value              |
+        | memory            | 5000               |
+        | disk-size         | 30g                |
+        | cpus              | 2                  |
+        | docker-env        | [FOO=BAR]          |
+        | docker-opt        | [dns=8.8.8.8]      |
+        | insecure-registry | [foo.bar:5000]     |
+
+  Scenario: Deleting Minishift instance
+    When executing "minishift delete --force" succeeds
+    Then Minishift should have state "Does Not Exist"

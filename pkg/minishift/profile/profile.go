@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"path/filepath"
+	"regexp"
 
 	"github.com/minishift/minishift/pkg/minikube/constants"
 	"github.com/minishift/minishift/pkg/minishift/config"
@@ -47,6 +48,11 @@ func GetProfileList() []string {
 	}
 
 	for _, f := range files {
+		// Skip non-directory and hidden stuffs
+		match, _ := regexp.MatchString("^\\.", f.Name())
+		if !filehelper.IsDirectory(filepath.Join(profileBaseDir, f.Name())) || match {
+			continue
+		}
 		profileList = append(profileList, f.Name())
 	}
 	return profileList
@@ -68,18 +74,10 @@ func SetActiveProfile(name string) error {
 
 // Get Active Profile from AllInstancesConfig
 func GetActiveProfile() string {
-	return config.AllInstancesConfig.ActiveProfile
-}
-
-// Placeholder function to change variables related to a VM instance
-// This needs a better solution than this as these variables should not be
-// changed outside of cmd/root.go. However cluster.GetHostStatus(api) uses
-// constants.MachineName inside the function.
-// This is a temporary fix and we will findout a better way to do it.
-func UpdateProfileConstants(profileName string) {
-	constants.ProfileName = profileName
-	constants.MachineName = constants.ProfileName
-	constants.Minipath = constants.GetProfileHomeDir(constants.ProfileName)
+	if config.AllInstancesConfig != nil {
+		return config.AllInstancesConfig.ActiveProfile
+	}
+	return ""
 }
 
 func SetDefaultProfileActive() error {

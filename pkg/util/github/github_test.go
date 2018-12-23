@@ -17,18 +17,19 @@ limitations under the License.
 package github
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 
 	"github.com/google/go-github/github"
 	minitesting "github.com/minishift/minishift/pkg/testing"
 	minishiftos "github.com/minishift/minishift/pkg/util/os"
+	"github.com/stretchr/testify/assert"
 )
 
 var (
@@ -45,7 +46,7 @@ var assetSet = []struct {
 	binary           OpenShiftBinaryType
 	os               minishiftos.OS
 	version          string
-	expectedAssetId  int
+	expectedAssetId  int64
 	expectedFilename string
 }{
 	{OC, minishiftos.LINUX, testVersion, 2489310, "openshift-origin-client-tools-v1.3.1-dad658de7465ba8a234a4fb40b5b446a45a4cee1-linux-64bit.tar.gz"},
@@ -57,24 +58,19 @@ func TestGetAssetIdAndFilename(t *testing.T) {
 	EnsureGitHubApiAccessTokenSet(t)
 
 	for _, testAsset := range assetSet {
-		release, resp, err = gitHubClient.Repositories.GetReleaseByTag("openshift", "origin", testAsset.version)
-		if err != nil {
-			t.Fatal(err, "Could not get OpenShift release")
-		}
+		ctx := context.Background()
+		release, resp, err = gitHubClient.Repositories.GetReleaseByTag(ctx, "openshift", "origin", testAsset.version)
+		assert.NoError(t, err, "Could not get OpenShift release")
 		defer func() {
 			_ = resp.Body.Close()
 		}()
 
 		actualAssetID, actualFilename := getAssetIdAndFilename(testAsset.binary, testAsset.os, release)
-		if actualAssetID != testAsset.expectedAssetId {
-			t.Fatalf("Unexpected asset id for binary %s for OS %s. Expected %d, got %d",
-				testAsset.binary, testAsset.os, testAsset.expectedAssetId, actualAssetID)
-		}
+		assert.Equal(t, testAsset.expectedAssetId, actualAssetID, "Unexpected asset id for binary %s for OS %s",
+			testAsset.binary, testAsset.os)
 
-		if actualFilename != testAsset.expectedFilename {
-			t.Fatalf("Unexpected filename for binary %s for OS %s. Expected %s, got %s",
-				testAsset.binary, testAsset.os, testAsset.expectedFilename, actualFilename)
-		}
+		assert.Equal(t, testAsset.expectedFilename, actualFilename, "Unexpected filename for binary %s for OS %s.",
+			testAsset.binary, testAsset.os)
 	}
 }
 
@@ -90,37 +86,27 @@ func TestDownloadOc(t *testing.T) {
 	defer minitesting.ResetDefaultRoundTripper()
 
 	testDir, err := ioutil.TempDir("", "minishift-test-")
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err, "Error crating temp directory")
 	defer os.RemoveAll(testDir)
 
 	for _, testAsset := range assetSet {
 		err = DownloadOpenShiftReleaseBinary(testAsset.binary, testAsset.os, testAsset.version, testDir)
-		if err != nil {
-			t.Fatal(err)
-		}
+		assert.NoError(t, err, "Error in downloading OpenShift release binary")
 
 		expectedBinaryPath := filepath.Join(testDir, testAsset.binary.String())
 		if testAsset.os == minishiftos.WINDOWS {
 			expectedBinaryPath += ".exe"
 		}
 		fileInfo, err := os.Lstat(expectedBinaryPath)
-		if err != nil {
-			t.Fatal(err)
-		}
+		assert.NoError(t, err, "Error in getting fileinfo")
 
 		if runtime.GOOS != "windows" {
 			expectedFilePermissions := "-rwxrwxrwx"
-			if fileInfo.Mode().String() != expectedFilePermissions {
-				t.Fatalf("Wrong file permisisons. Expected %s. Got %s", expectedFilePermissions, fileInfo.Mode().String())
-			}
+			assert.Equal(t, expectedFilePermissions, fileInfo.Mode().String())
 		}
 
 		err = os.Remove(expectedBinaryPath)
-		if err != nil {
-			t.Fatalf("Unable to delete %s", expectedBinaryPath)
-		}
+		assert.NoError(t, err, "Error in removing expected binary path")
 	}
 }
 
@@ -128,41 +114,29 @@ func TestInvalidVersion(t *testing.T) {
 	EnsureGitHubApiAccessTokenSet(t)
 
 	testDir, err := ioutil.TempDir("", "minishift-test-")
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err)
 	defer os.RemoveAll(testDir)
 
 	dummyVersion := "foo"
 	err = DownloadOpenShiftReleaseBinary(OPENSHIFT, minishiftos.WINDOWS, dummyVersion, testDir)
-	if err == nil {
-		t.Fatal("There should have been an error")
-	}
+	assert.Error(t, err, "Error in downloading OpenShift release binary")
 
-	expectedErrorMessage := fmt.Sprintf("Cannot get the OpenShift release version %s", dummyVersion)
-	if !strings.HasPrefix(err.Error(), expectedErrorMessage) {
-		t.Fatalf("Expected error: '%s'. Got: '%s'\n", expectedErrorMessage, err.Error())
-	}
+	expectedErrorMessage := fmt.Sprintf("Cannot get the OpenShift release version %s: GET https://api.github.com/repos/openshift/origin/releases/tags/foo: 404 Not Found []", dummyVersion)
+	assert.EqualError(t, err, expectedErrorMessage)
 }
 
 func TestInvalidBinaryFormat(t *testing.T) {
 	EnsureGitHubApiAccessTokenSet(t)
 
 	testDir, err := ioutil.TempDir("", "minishift-test-")
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err, "Error creating temp directory")
 	defer os.RemoveAll(testDir)
 
 	err = DownloadOpenShiftReleaseBinary(OPENSHIFT, minishiftos.WINDOWS, testVersion, testDir)
-	if err == nil {
-		t.Fatal("There should have been an error")
-	}
+	assert.Error(t, err, "Error in downloading OpenShift release binary")
 
 	expectedErrorMessage := "Cannot get binary 'openshift' in version v1.3.1 for the target environment Windows"
-	if err.Error() != expectedErrorMessage {
-		t.Fatalf("Expected error: '%s'. Got: '%s'\n", expectedErrorMessage, err.Error())
-	}
+	assert.EqualError(t, err, expectedErrorMessage)
 }
 
 // See https://github.com/minishift/minishift/issues/331
@@ -177,34 +151,24 @@ func Test_Download_Oc_1_4_1(t *testing.T) {
 	defer minitesting.ResetDefaultRoundTripper()
 
 	testDir, err := ioutil.TempDir("", "minishift-test-")
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err, "Error creating temp directory")
 	defer os.RemoveAll(testDir)
 
 	err = DownloadOpenShiftReleaseBinary(OC, minishiftos.LINUX, "v1.4.1", testDir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err, "Error in downloading OpenShift binary")
 
 	expectedBinaryPath := filepath.Join(testDir, "oc")
 
 	fileInfo, err := os.Lstat(expectedBinaryPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err, "Error in getting fileinfo")
 
 	if runtime.GOOS != "windows" {
 		expectedFilePermissions := "-rwxrwxrwx"
-		if fileInfo.Mode().String() != expectedFilePermissions {
-			t.Fatalf("Wrong file permisisons. Expected %s. Got %s", expectedFilePermissions, fileInfo.Mode().String())
-		}
+		assert.Equal(t, expectedFilePermissions, fileInfo.Mode().String())
 	}
 
 	err = os.Remove(expectedBinaryPath)
-	if err != nil {
-		t.Fatalf("Unable to delete %s", expectedBinaryPath)
-	}
+	assert.NoError(t, err, "Error in removing expected binary path")
 }
 
 func EnsureGitHubApiAccessTokenSet(t *testing.T) {

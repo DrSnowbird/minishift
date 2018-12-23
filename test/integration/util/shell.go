@@ -26,6 +26,7 @@ import (
 	"io"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/DATA-DOG/godog/gherkin"
 	"github.com/minishift/minishift/pkg/util/os"
@@ -204,10 +205,10 @@ func CloseHostShellInstance() error {
 }
 
 func ExecuteInHostShell(command string) error {
-	var err error
+	command = ProcessVariables(command)
 
 	if shell.instance == nil {
-		return errors.New("Shell instance is started.")
+		return errors.New("Shell instance is not started.")
 	}
 
 	shell.outbuf.Reset()
@@ -216,7 +217,7 @@ func ExecuteInHostShell(command string) error {
 
 	LogMessage(shell.name, command)
 
-	_, err = io.WriteString(shell.inPipe, command+"\n")
+	_, err := io.WriteString(shell.inPipe, command+"\n")
 	if err != nil {
 		return err
 	}
@@ -250,6 +251,25 @@ func ExecuteInHostShellSucceedsOrFails(command string, expectedResult string) er
 	return err
 }
 
+func CommandOutputInHostShellWithRetry(retryCount int, retryTime string, command string, expected string) error {
+	var exitCode, stdout string
+	retryDuration, err := time.ParseDuration(retryTime)
+	if err != nil {
+		return err
+	}
+
+	for i := 0; i < retryCount; i++ {
+		err := ExecuteInHostShell(command)
+		exitCode, stdout := shell.excbuf.String(), shell.outbuf.String()
+		if err == nil && exitCode == "0" && strings.Contains(stdout, expected) {
+			return nil
+		}
+		time.Sleep(retryDuration)
+	}
+
+	return fmt.Errorf("Command '%s', Expected: exitCode 0, stdout %s, Actual: exitCode %s, stdout %s", command, expected, exitCode, stdout)
+}
+
 func ExecuteInHostShellLineByLine() error {
 	var err error
 	stdout := shell.getLastShellOutput("stdout")
@@ -271,6 +291,10 @@ func ExecuteMinishiftInHostShell(commandField string) error {
 func ExecuteMinishiftInHostShellSucceedsOrFails(commandField string, expected string) error {
 	command := shell.minishiftPath + " " + commandField
 	return ExecuteInHostShellSucceedsOrFails(command, expected)
+}
+
+func ExecuteCommandInHostShellWithRetry(retryCount int, retryTime string, command string, expected string) error {
+	return CommandOutputInHostShellWithRetry(retryCount, retryTime, command, expected)
 }
 
 func HostShellCommandReturnShouldContain(commandField string, expected string) error {

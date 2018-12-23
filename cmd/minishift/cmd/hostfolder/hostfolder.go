@@ -20,10 +20,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var HostfolderCmd = &cobra.Command{
+var HostFolderCmd = &cobra.Command{
 	Use:   "hostfolder SUBCOMMAND [flags]",
-	Short: "Manages host folders for the OpenShift cluster.",
-	Long:  `Manages host folders for the OpenShift cluster. Use the sub-commands to define, mount, unmount, and list host folders.`,
+	Short: "Manages host folders for the Minishift VM.",
+	Long:  `Manages host folders for the Minishift VM. Use the sub-commands to define, mount, umount, and list host folders.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		cmd.Help()
 	},

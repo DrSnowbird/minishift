@@ -17,18 +17,22 @@ limitations under the License.
 package registration
 
 import (
+	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/docker/machine/libmachine/provision"
+	"github.com/golang/glog"
 	"github.com/minishift/minishift/pkg/util"
 	"github.com/minishift/minishift/pkg/util/progressdots"
 	minishiftStrings "github.com/minishift/minishift/pkg/util/strings"
 )
 
 const (
-	RHSMName = "   Red Hat Developers or Red Hat Subscription Management (RHSM)"
+	RHSMName       = "   Red Hat Developers or Red Hat Subscription Management (RHSM)"
+	RedHatRegistry = "registry.redhat.io"
 )
 
 func init() {
@@ -58,12 +62,11 @@ func (registrator *RedHatRegistrator) CompatibleWithDistribution(osReleaseInfo *
 	return true
 }
 
-// Register attempts to register the system with RHSM
+// Register attempts to register the system with RHSM and registry.redhat.io
 func (registrator *RedHatRegistrator) Register(param *RegistrationParameters) error {
-	if isRegistered, err := registrator.isRegistered(); !isRegistered && err == nil {
+	keyringDocsLink := "https://docs.okd.io/latest/minishift/troubleshooting/troubleshooting-misc.html#Remove-password-from-keychain"
+	if isRegistered, err := registrator.IsRegistered(); !isRegistered && err == nil {
 		for i := 1; i < 4; i++ {
-			// Initialize progressDots channel
-			progressDots := progressdots.New()
 			// request username (disallow empty value)
 			if param.Username == "" {
 				// Check if Terminal tty supported or not
@@ -76,8 +79,28 @@ func (registrator *RedHatRegistrator) Register(param *RegistrationParameters) er
 			}
 			// request password (disallow empty value)
 			if param.Password == "" {
+				if i == 1 {
+					fmt.Printf("   Retriving password from keychain ...")
+					param.Password, err = param.GetPasswordKeyring(param.Username)
+					if err != nil {
+						fmt.Println(" FAIL ")
+					} else {
+						fmt.Println(" OK ")
+					}
+				}
+
 				for param.Password == "" {
 					param.Password = param.GetPasswordInteractive(RHSMName + " password")
+					fmt.Printf("   Storing password in keychain ...")
+					err := param.SetPasswordKeyring(param.Username, param.Password)
+					if err != nil {
+						fmt.Println(" FAIL ")
+					} else {
+						fmt.Println(" OK ")
+					}
+					if glog.V(3) {
+						fmt.Println(err)
+					}
 				}
 			}
 
@@ -88,7 +111,28 @@ func (registrator *RedHatRegistrator) Register(param *RegistrationParameters) er
 				param.Username,
 				minishiftStrings.EscapeSingleQuote(param.Password))
 
-			fmt.Print("   Registration in progress ")
+			// prepare docker login command for registry.redhat.io
+			dockerLoginCommand := fmt.Sprintf("docker login --username %s --password %s %s",
+				param.Username,
+				minishiftStrings.EscapeSingleQuote(param.Password),
+				RedHatRegistry)
+
+			fmt.Printf("   Login to %s in progress ", RedHatRegistry)
+			// Initialize progressDots channel
+			progressDots := progressdots.New()
+			progressDots.Start()
+			// Login to docker registry
+			_, err = registrator.SSHCommand(dockerLoginCommand)
+			progressDots.Stop()
+			if err == nil {
+				fmt.Println(" OK ")
+			} else {
+				fmt.Println(" FAIL ")
+			}
+
+			fmt.Printf("   Registration in progress ")
+			// Initialize progressDots channel again for registration
+			progressDots = progressdots.New()
 			progressDots.Start()
 			startTime := time.Now()
 			// start timed SSH command to register
@@ -107,9 +151,9 @@ func (registrator *RedHatRegistrator) Register(param *RegistrationParameters) er
 
 			// general error when registration fails
 			if strings.Contains(err.Error(), "Invalid username or password") {
-				fmt.Println("   Invalid username or password. Retry:", i)
+				fmt.Printf("   Invalid username or password. To delete stored password refer to %s. Retry: %d\n", keyringDocsLink, i)
 			} else {
-				return err
+				return errors.New(redactPassword(err.Error()))
 			}
 
 			// always reset credentials
@@ -117,7 +161,7 @@ func (registrator *RedHatRegistrator) Register(param *RegistrationParameters) er
 			param.Password = ""
 		}
 		if err != nil {
-			return err
+			return errors.New(redactPassword(err.Error()))
 		}
 	}
 	return nil
@@ -125,9 +169,13 @@ func (registrator *RedHatRegistrator) Register(param *RegistrationParameters) er
 
 // Unregister attempts to unregister the system from RHSM
 func (registrator *RedHatRegistrator) Unregister(param *RegistrationParameters) error {
-	if isRegistered, err := registrator.isRegistered(); isRegistered {
+	if isRegistered, err := registrator.IsRegistered(); isRegistered {
 		if _, err := registrator.SSHCommand(
 			"sudo -E subscription-manager unregister"); err != nil {
+			return err
+		}
+		if _, err := registrator.SSHCommand(
+			"sudo -E subscription-manager clean"); err != nil {
 			return err
 		}
 	} else {
@@ -137,13 +185,19 @@ func (registrator *RedHatRegistrator) Unregister(param *RegistrationParameters) 
 }
 
 // isRegistered returns registration state of RHSM or errors when undetermined
-func (registrator *RedHatRegistrator) isRegistered() (bool, error) {
-	if output, err := registrator.SSHCommand("sudo -E subscription-manager version"); err != nil {
+func (registrator *RedHatRegistrator) IsRegistered() (bool, error) {
+	if output, err := registrator.SSHCommand("sudo -E subscription-manager list"); err != nil {
 		return false, err
 	} else {
-		if !strings.Contains(output, "not registered") {
+		if !strings.Contains(output, "Unknown") {
 			return true, nil
 		}
 		return false, nil
 	}
+}
+
+func redactPassword(msg string) string {
+	pattern := regexp.MustCompile(`--password .*`)
+	msgWithRedactedPass := pattern.ReplaceAllString(msg, "--password ********")
+	return msgWithRedactedPass
 }

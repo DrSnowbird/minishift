@@ -17,10 +17,18 @@ limitations under the License.
 package util
 
 import (
+	"fmt"
+	"os"
+	"os/user"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/pkg/errors"
+	"github.com/stretchr/testify/assert"
+	"io/ioutil"
 )
 
 // Returns a function that will return n errors, then return successfully forever.
@@ -46,25 +54,21 @@ func TestErrorGenerator(t *testing.T) {
 	errors := 3
 	f := errorGenerator(errors, false)
 	for i := 0; i < errors-1; i++ {
-		if err := f(); err == nil {
-			t.Fatalf("Error should have been thrown at iteration %v", i)
-		}
+		err := f()
+		assert.Error(t, err, fmt.Sprintf("Error should have been thrown at iteration %v", i))
 	}
-	if err := f(); err == nil {
-		t.Fatalf("Error should not have been thrown this call!")
-	}
+	err := f()
+	assert.Error(t, err)
 }
 
 func TestRetry(t *testing.T) {
 	f := errorGenerator(4, true)
-	if err := Retry(5, f); err != nil {
-		t.Fatalf("Error should not have been raised by retry.")
-	}
+	err := Retry(5, f) //err != nil {
+	assert.NoError(t, err, "Error should not have been raised by retry")
 
 	f = errorGenerator(5, true)
-	if err := Retry(4, f); err == nil {
-		t.Fatalf("Error should have been raised by retry.")
-	}
+	err = Retry(4, f)
+	assert.Error(t, err, "Error should have been raised by retry")
 }
 
 func TestMultiError(t *testing.T) {
@@ -76,37 +80,12 @@ func TestMultiError(t *testing.T) {
 	err := m.ToError()
 	expected := `Error 1
 Error 2`
-	if err.Error() != expected {
-		t.Fatalf("%s != %s", err, expected)
-	}
+
+	assert.Equal(t, expected, err.Error())
 
 	m = MultiError{}
-	if err := m.ToError(); err != nil {
-		t.Fatalf("Unexpected error: %s", err)
-	}
-}
-
-func TestVersionOrdinal(t *testing.T) {
-	var versionTestData = []struct {
-		OpenshiftVersion    string
-		MinOpenshiftVersion string
-		expectedResult      bool
-	}{
-		{"v3.6.0", "v3.7.0", true},
-		{"v3.4.1.10", "v3.4.1.2", false},
-		{"v3.6.0-alpha.1", "v3.6.0-alpha.2", true},
-		{"v3.7.1", "v3.7.1", true},
-		{"v3.5.5.31.24", "v3.4.2.1", false},
-		{"v3.6.173.0.21", "v3.5.5.31.24", false},
-		{"v3.6.0-rc1", "v3.6.0-alpha.1", false},
-		{"v3.6.0-alpha.1", "v3.6.0-beta.0", true},
-	}
-
-	for _, versionTest := range versionTestData {
-		if (VersionOrdinal(versionTest.MinOpenshiftVersion) >= VersionOrdinal(versionTest.OpenshiftVersion)) != versionTest.expectedResult {
-			t.Errorf("Expected: %s >= %s", versionTest.MinOpenshiftVersion, versionTest.OpenshiftVersion)
-		}
-	}
+	err = m.ToError()
+	assert.NoError(t, err)
 }
 
 var durationTests = []struct {
@@ -131,8 +110,109 @@ func TestFriendlyDuration(t *testing.T) {
 	for _, tt := range durationTests {
 		got := FriendlyDuration(tt.in)
 		expected, _ := time.ParseDuration(tt.want)
-		if got != expected {
-			t.Errorf("Expected %v but got %v", got, expected)
-		}
+		assert.Equal(t, expected, got)
 	}
+}
+
+func Test_command_executes_successfully_with_absolute_path(t *testing.T) {
+	currentDir, err := os.Getwd()
+	assert.NoError(t, err, "Error getting working directory")
+
+	dummyBinaryPath := filepath.Join(currentDir, "..", "..", "test", "testdata")
+
+	switch os := runtime.GOOS; os {
+	case "darwin":
+		dummyBinaryPath = filepath.Join(dummyBinaryPath, "dummybinary_darwin")
+	case "linux":
+		dummyBinaryPath = filepath.Join(dummyBinaryPath, "dummybinary_linux")
+	case "windows":
+		dummyBinaryPath = filepath.Join(dummyBinaryPath, "dummybinary_windows.exe")
+	default:
+		assert.FailNow(t, "Unpexpected OS")
+	}
+
+	testData := []struct {
+		command string
+		exists  bool
+	}{
+		{filepath.Join(currentDir, "..", "..", "test", "testdata", "blahh"), false},
+		{dummyBinaryPath, true},
+	}
+	for _, v := range testData {
+		got := CommandExecutesSuccessfully(v.command)
+		assert.Equal(t, v.exists, got, "while executing %s", dummyBinaryPath)
+	}
+}
+
+func Test_command_executes_successfully_with_command_lookup(t *testing.T) {
+	currentDir, err := os.Getwd()
+	assert.NoError(t, err, "Error getting working directory")
+
+	dummyBinaryPath := filepath.Join(currentDir, "..", "..", "test", "testdata")
+	origPath := os.Getenv("PATH")
+	os.Setenv("PATH", dummyBinaryPath+string(os.PathListSeparator)+origPath)
+	defer func() {
+		os.Setenv("PATH", origPath)
+	}()
+
+	var cmd string
+	switch os := runtime.GOOS; os {
+	case "darwin":
+		cmd = "dummybinary_darwin"
+	case "linux":
+		cmd = "dummybinary_linux"
+	case "windows":
+		cmd = "dummybinary_windows.exe"
+	default:
+		assert.FailNow(t, "Unpexpected OS")
+	}
+
+	success := CommandExecutesSuccessfully(cmd)
+	assert.True(t, success)
+}
+
+func Test_command_executes_unsuccessfully_with_command_lookup(t *testing.T) {
+	var cmd string
+	switch os := runtime.GOOS; os {
+	case "darwin":
+		cmd = "dummybinary_darwin"
+	case "linux":
+		cmd = "dummybinary_linux"
+	case "windows":
+		cmd = "dummybinary_windows.exe"
+	default:
+		assert.FailNow(t, "Unpexpected OS")
+	}
+
+	success := CommandExecutesSuccessfully(cmd)
+	assert.False(t, success)
+}
+
+func TestWritableDirectory(t *testing.T) {
+	testDir, err := ioutil.TempDir("", "minishift-test-")
+	assert.NoError(t, err)
+	defer os.RemoveAll(testDir)
+
+	assert.True(t, IsDirectoryWritable(testDir))
+}
+
+func TestNonWritableDirectory(t *testing.T) {
+	if isAppVeyorUser() ||
+		IsAdministrativeUser() {
+		t.Skip("Skipping as CI runs as root or administrator")
+	}
+
+	testDir, err := ioutil.TempDir("", "minishift-test-")
+	assert.NoError(t, err)
+	defer os.RemoveAll(testDir)
+
+	os.Chmod(testDir, 0400) // make dir read-only
+	assert.False(t, IsDirectoryWritable(testDir))
+
+}
+
+func isAppVeyorUser() bool {
+	// Checking for $env:APPVEYOR does not work !
+	u, _ := user.Current()
+	return strings.Contains(u.Username, "appveyor")
 }

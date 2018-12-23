@@ -26,6 +26,7 @@ import (
 
 	"github.com/minishift/minishift/cmd/minishift/state"
 	"github.com/minishift/minishift/pkg/minikube/cluster"
+	viperConfig "github.com/minishift/minishift/pkg/minishift/config"
 )
 
 // Runs all the validation or callback functions and collects errors
@@ -50,17 +51,17 @@ func findSetting(name string) (Setting, error) {
 			return s, nil
 		}
 	}
-	return Setting{}, fmt.Errorf("Cannot find property name %s", name)
+	return Setting{}, fmt.Errorf("Cannot find property name '%s'", name)
 }
 
 // Set Functions
 
-func SetString(m MinishiftConfig, name string, val string) error {
+func SetString(m viperConfig.ViperConfig, name string, val string) error {
 	m[name] = val
 	return nil
 }
 
-func SetInt(m MinishiftConfig, name string, val string) error {
+func SetInt(m viperConfig.ViperConfig, name string, val string) error {
 	i, err := strconv.Atoi(val)
 	if err != nil {
 		return err
@@ -69,7 +70,7 @@ func SetInt(m MinishiftConfig, name string, val string) error {
 	return nil
 }
 
-func SetBool(m MinishiftConfig, name string, val string) error {
+func SetBool(m viperConfig.ViperConfig, name string, val string) error {
 	b, err := strconv.ParseBool(val)
 	if err != nil {
 		return err
@@ -78,7 +79,7 @@ func SetBool(m MinishiftConfig, name string, val string) error {
 	return nil
 }
 
-func SetSlice(m MinishiftConfig, name string, val string) error {
+func SetSlice(m viperConfig.ViperConfig, name string, val string) error {
 	var tmpSlice []string
 	if val != "" {
 		for _, v := range strings.Split(val, ",") {
@@ -95,10 +96,10 @@ func RequiresRestartMsg(name string, value string) error {
 
 	_, err := cluster.CheckIfApiExistsAndLoad(api)
 	if err != nil {
-		fmt.Fprintln(os.Stdout, fmt.Sprintf("No Minishift instance exists. New %s setting will be applied on next 'minishift start'", name))
+		fmt.Fprintln(os.Stdout, fmt.Sprintf("No Minishift instance exists. New '%s' setting will be applied on next 'minishift start'", name))
 	} else {
 		fmt.Fprintln(os.Stdout, fmt.Sprintf("You currently have an existing Minishift instance. "+
-			"Changes to the %s setting are only applied when a new Minishift instance is created.\n"+
+			"Changes to the '%s' setting are only applied when a new Minishift instance is created.\n"+
 			"To let the configuration changes take effect, "+
 			"you must delete the current instance with 'minishift delete' "+
 			"and then start a new one with 'minishift start'.", name))

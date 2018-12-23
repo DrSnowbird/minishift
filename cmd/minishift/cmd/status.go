@@ -19,15 +19,20 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/template"
 
+	"github.com/docker/go-units"
+
 	"github.com/docker/machine/libmachine"
+	"github.com/docker/machine/libmachine/provision"
 	"github.com/docker/machine/libmachine/state"
 	cmdState "github.com/minishift/minishift/cmd/minishift/state"
 	"github.com/minishift/minishift/pkg/minikube/cluster"
 	"github.com/minishift/minishift/pkg/minikube/constants"
 	openshiftVersion "github.com/minishift/minishift/pkg/minishift/openshift/version"
+	"github.com/minishift/minishift/pkg/minishift/registration"
 	"github.com/minishift/minishift/pkg/util/os/atexit"
 	"github.com/spf13/cobra"
 )
@@ -36,6 +41,15 @@ var statusFormat = `Minishift:  {{.MinishiftStatus}}
 Profile:    {{.ProfileName}}
 OpenShift:  {{.ClusterStatus}}
 DiskUsage:  {{.DiskUsage}}
+CacheUsage: {{.CacheUsage}} (used by oc binary, ISO or cached images)
+`
+
+var statusFormatWithRegistration = `Minishift:  {{.MinishiftStatus}}
+Profile:    {{.ProfileName}}
+OpenShift:  {{.ClusterStatus}}
+DiskUsage:  {{.DiskUsage}}
+CacheUsage: {{.CacheUsage}} (used by oc binary, ISO or cached images)
+RHSM: 	    {{.Registration}}
 `
 
 type Status struct {
@@ -43,6 +57,12 @@ type Status struct {
 	ProfileName     string
 	ClusterStatus   string
 	DiskUsage       string
+	CacheUsage      string
+}
+
+type StatusWithRegistration struct {
+	Status
+	Registration string
 }
 
 // statusCmd represents the status command
@@ -65,9 +85,11 @@ func runStatus(cmd *cobra.Command, args []string) {
 		}
 		atexit.ExitWithMessage(0, s)
 	}
+	sshCommander := provision.GenericSSHCommander{Driver: host.Driver}
 
 	openshiftStatus := "Stopped"
 	diskUsage := "Unknown"
+	cacheUsage := "Unknown"
 	profileName := constants.ProfileName
 
 	vmStatus, err := cluster.GetHostStatus(api, constants.MachineName)
@@ -75,18 +97,53 @@ func runStatus(cmd *cobra.Command, args []string) {
 		atexit.ExitWithMessage(1, fmt.Sprintf("Error getting cluster status: %s", err.Error()))
 	}
 
+	var supportsRegistration bool
+	rhelRegistration := "Not Registered"
+
 	if vmStatus == state.Running.String() {
-		openshiftVersion, err := openshiftVersion.GetOpenshiftVersion(host)
+		openshiftVersion, err := openshiftVersion.GetOpenshiftVersion(sshCommander)
 		if err == nil {
 			openshiftStatus = fmt.Sprintf("Running (%s)", strings.Split(openshiftVersion, "\n")[0])
 		}
 
-		diskSize, diskUse := getDiskUsage(host.Driver, StorageDisk)
-		diskUsage = fmt.Sprintf("%s of %s", diskUse, diskSize)
+		diskSize, diskUse, mountpoint := getDiskUsage(host.Driver, StorageDisk)
+		if host.Driver.DriverName() == "generic" {
+			diskSize, diskUse, mountpoint = getDiskUsage(host.Driver, StorageDiskForGeneric)
+		}
+		diskUsage = fmt.Sprintf("%s of %s (Mounted On: %s)", diskUse, diskSize, mountpoint)
+
+		_, supportsRegistration, _ = registration.DetectRegistrator(sshCommander)
+		if supportsRegistration {
+			redHatRegistrator := registration.NewRedHatRegistrator(sshCommander)
+			if registered, err := redHatRegistrator.IsRegistered(); registered && err == nil {
+				rhelRegistration = "Registered"
+			}
+		}
 	}
 
-	status := Status{vmStatus, profileName, openshiftStatus, diskUsage}
+	cacheDir := filepath.Join(constants.GetMinishiftHomeDir(), "cache")
+	var size int64
+	err = filepath.Walk(cacheDir, func(_ string, info os.FileInfo, err error) error {
+		if !info.IsDir() {
+			size += info.Size()
+		}
+		return err
+	})
+	if err != nil {
+		atexit.ExitWithMessage(1, fmt.Sprintf("Error finding size of cache: %s", err.Error()))
+	}
 
+	cacheUsage = units.HumanSize(float64(size))
+	if supportsRegistration {
+		status := StatusWithRegistration{Status{vmStatus, profileName, openshiftStatus, diskUsage, cacheUsage}, rhelRegistration}
+		printStatus(status, statusFormatWithRegistration)
+	} else {
+		status := Status{vmStatus, profileName, openshiftStatus, diskUsage, cacheUsage}
+		printStatus(status, statusFormat)
+	}
+}
+
+func printStatus(status interface{}, statusFormat string) {
 	tmpl, err := template.New("status").Parse(statusFormat)
 	if err != nil {
 		atexit.ExitWithMessage(1, fmt.Sprintf("Error creating status template: %s", err.Error()))

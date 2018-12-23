@@ -16,7 +16,12 @@ limitations under the License.
 
 package config
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
 
 type validationTest struct {
 	value     string
@@ -26,11 +31,11 @@ type validationTest struct {
 func runValidations(t *testing.T, tests []validationTest, name string, f func(string, string) error) {
 	for _, tt := range tests {
 		err := f(name, tt.value)
-		if err != nil && !tt.shouldErr {
-			t.Errorf("%s: %v", tt.value, err)
+		if !tt.shouldErr {
+			assert.NoError(t, err, fmt.Sprintf("Error for testcase %v", tt))
 		}
-		if err == nil && tt.shouldErr {
-			t.Errorf("%s: %v", tt.value, err)
+		if tt.shouldErr {
+			assert.Error(t, err, fmt.Sprintf("Error for testcase %v", tt))
 		}
 	}
 }
@@ -49,7 +54,6 @@ func TestDriver(t *testing.T) {
 	}
 
 	runValidations(t, tests, "vm-driver", IsValidDriver)
-
 }
 
 func TestValidCIDR(t *testing.T) {
@@ -111,15 +115,7 @@ func TestValidURL(t *testing.T) {
 			shouldErr: true,
 		},
 		{
-			value:     "/absolute/path/no/protocol/minishift.tar.gz",
-			shouldErr: false,
-		},
-		{
-			value:     "http://foo.com/minishift.tar.gz",
-			shouldErr: false,
-		},
-		{
-			value:     "file:///foo/download/minishift.tar.gz",
+			value:     "http://foo.com/boot2docker.iso",
 			shouldErr: false,
 		},
 		{
@@ -128,14 +124,14 @@ func TestValidURL(t *testing.T) {
 		},
 		{
 			value:     "b2d",
-			shouldErr: false,
+			shouldErr: true,
 		},
 		{
 			value:     "random",
 			shouldErr: true,
 		},
 	}
-	runValidations(t, tests, "iso-url", IsValidUrl)
+	runValidations(t, tests, "iso-url", IsValidISOUrl)
 }
 
 func TestValidProxyURL(t *testing.T) {
@@ -186,7 +182,7 @@ func TestValidProxyURL(t *testing.T) {
 			shouldErr: true,
 		},
 	}
-	runValidations(t, tests, "iso-url", IsValidProxy)
+	runValidations(t, tests, "http-proxy", IsValidProxy)
 }
 
 func TestValidIPv4Address(t *testing.T) {
@@ -265,4 +261,54 @@ func TestValidNetmask(t *testing.T) {
 		},
 	}
 	runValidations(t, tests, "netmask", IsValidNetmask)
+}
+
+func TestValidPort(t *testing.T) {
+
+	var tests = []validationTest{
+		{
+			value:     "",
+			shouldErr: true,
+		},
+		{
+			value:     "0",
+			shouldErr: true,
+		},
+		{
+			value:     "1023",
+			shouldErr: true,
+		},
+		{
+			value:     "1500",
+			shouldErr: false,
+		},
+		{
+			value:     "86000",
+			shouldErr: true,
+		},
+	}
+	runValidations(t, tests, "hostfolders-sftp-port", IsValidPort)
+}
+
+func TestValidTimezone(t *testing.T) {
+
+	var tests = []validationTest{
+		{
+			value:     "Europe/Berli",
+			shouldErr: true,
+		},
+		{
+			value:     "APAC",
+			shouldErr: true,
+		},
+		{
+			value:     "Europe/Berlin",
+			shouldErr: false,
+		},
+		{
+			value:     "UTC",
+			shouldErr: false,
+		},
+	}
+	runValidations(t, tests, "timezone", IsValidTimezone)
 }

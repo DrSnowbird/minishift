@@ -36,7 +36,7 @@ const (
 	targetFlag = "target"
 	patchFlag  = "patch"
 
-	unknownPatchTargetError = "Unkown patch target. Only 'master' and 'node' are supported."
+	unknownPatchTargetError = "Unkown patch target. Only 'master', 'node' and 'kube' are supported."
 	emptyPatchError         = "You must specify a patch using the --patch flag."
 	invalidJSONError        = "The patch must be a valid JSON file."
 )
@@ -54,14 +54,14 @@ var setCmd = &cobra.Command{
 }
 
 func init() {
-	setCmd.Flags().StringVar(&target, targetFlag, "master", "Target configuration to patch. Options are 'master' or 'node'.")
+	setCmd.Flags().StringVar(&target, targetFlag, "master", "Target configuration to patch. Options are 'master', 'node' and 'kube'.")
 	setCmd.Flags().StringVar(&patch, patchFlag, "", "The patch to apply.")
 	configCmd.AddCommand(setCmd)
 }
 
 func runPatch(cmd *cobra.Command, args []string) {
 	patchTarget := determineTarget(target)
-	if patchTarget == openshift.UNKNOWN {
+	if patchTarget == openshift.GetOpenShiftPatchTarget("unknown") {
 		atexit.ExitWithMessage(1, unknownPatchTargetError)
 	}
 
@@ -87,11 +87,13 @@ func runPatch(cmd *cobra.Command, args []string) {
 func determineTarget(target string) openshift.OpenShiftPatchTarget {
 	switch target {
 	case "master":
-		return openshift.MASTER
+		return openshift.GetOpenShiftPatchTarget("master")
 	case "node":
-		return openshift.NODE
+		return openshift.GetOpenShiftPatchTarget("node")
+	case "kube":
+		return openshift.GetOpenShiftPatchTarget("kube")
 	default:
-		return openshift.UNKNOWN
+		return openshift.GetOpenShiftPatchTarget("unknown")
 	}
 }
 

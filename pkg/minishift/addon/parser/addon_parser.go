@@ -28,14 +28,17 @@ import (
 	"github.com/minishift/minishift/pkg/minishift/addon"
 	"github.com/minishift/minishift/pkg/minishift/addon/command"
 	"github.com/minishift/minishift/pkg/util/filehelper"
+	minishiftStrings "github.com/minishift/minishift/pkg/util/strings"
 )
 
 const (
-	commentChar = "#"
+	commentChar     = "#"
+	ignoreErrorChar = "!"
+	evaluationChar  = ":="
 
-	noAddOnDefinitionFoundError         = "There needs to be an addon file per addon directory. Found none in %s"
-	multipleAddOnDefinitionsError       = "There can only be one addon file per addon directory. Found %s"
-	multipleAddOnRemoveDefinitionsError = "There can only be one addon.remove file per addon directory. Found %s"
+	noAddOnDefinitionFoundError         = "There needs to be an addon file per addon directory. Found none in '%s'"
+	multipleAddOnDefinitionsError       = "There can only be one addon file per addon directory. Found '%s'"
+	multipleAddOnRemoveDefinitionsError = "There can only be one addon.remove file per addon directory. Found '%s'"
 	regexToGetMetaTagInfo               = `^# ?([a-zA-Z-]*):(.*)`
 )
 
@@ -65,46 +68,55 @@ func NewAddOnParser() *AddOnParser {
 	echoHandler := &EchoCommandHandler{&defaultCommandHandler{}}
 	sshHandler.SetNext(echoHandler)
 
+	catHandler := &CatCommandHandler{&defaultCommandHandler{}}
+	echoHandler.SetNext(catHandler)
+
 	parser.handler = ocHandler
 
 	return &parser
 }
 
-// Parse takes as parameter a reader containing an addon definition and returns an AddOn instance.
-// If an error occurs, the error is returned.
-func (parser *AddOnParser) Parse(addOnDir string) (addon.AddOn, error) {
-	addonInstallReader, err := parser.getAddOnContentReader(addOnDir, ".addon")
+func (parser *AddOnParser) getAddOnContent(addOnDir, fileSuffix string) (addon.AddOnMeta, []command.Command, error) {
+	var (
+		meta     addon.AddOnMeta
+		commands []command.Command
+		err      error
+	)
+
+	addonReader, err := parser.getAddOnContentReader(addOnDir, fileSuffix)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	addonRemoveReader, err := parser.getAddOnContentReader(addOnDir, ".addon.remove")
-	if err != nil {
-		return nil, err
-	}
-	meta, commands, err := parser.parseAddOnContent(addonInstallReader)
-	if err != nil {
-		name := ""
+	if addonReader != nil {
+		meta, commands, err = parser.parseAddOnContent(addonReader)
+		var name string
 		if meta != nil {
 			name = meta.Name()
 		}
-		return nil, NewParseError(err.Error(), name, addOnDir)
-	}
-
-	var removeCommands []command.Command
-	if addonRemoveReader != nil {
-		_, removeCommands, err = parser.parseAddOnContent(addonRemoveReader)
 		if err != nil {
-			name := ""
-			if meta != nil {
-				name = meta.Name()
-			}
-			return nil, NewParseError(err.Error(), name, addOnDir)
+			return nil, nil, NewParseError(err.Error(), name, addOnDir)
+		}
+		if filepath.Base(addOnDir) != name {
+			return nil, nil, NewParseError(fmt.Sprintf("Add-on directory name should match to addon name"), "", addOnDir)
 		}
 	}
 
-	addOn := addon.NewAddOn(meta, commands, removeCommands, addOnDir)
+	return meta, commands, nil
+}
 
-	return addOn, nil
+// Parse parses the addon files containing in a directory provided via addOnDir and returns an AddOn instance.
+// If an error occurs, the error is returned.
+func (parser *AddOnParser) Parse(addOnDir string) (addon.AddOn, error) {
+	meta, commands, err := parser.getAddOnContent(addOnDir, ".addon")
+	if err != nil {
+		return nil, err
+	}
+	removeMeta, removeCommands, err := parser.getAddOnContent(addOnDir, ".addon.remove")
+	if err != nil {
+		return nil, err
+	}
+
+	return addon.NewAddOn(meta, removeMeta, commands, removeCommands, addOnDir), nil
 }
 
 func (parser *AddOnParser) getAddOnContentReader(addOnDir string, fileSuffix string) (io.Reader, error) {
@@ -185,6 +197,8 @@ func (parser *AddOnParser) parseHeader(scanner *bufio.Scanner) (addon.AddOnMeta,
 func (parser *AddOnParser) parseCommands(scanner *bufio.Scanner) ([]command.Command, error) {
 	var commands []command.Command
 	for scanner.Scan() {
+		var outputVariable string
+		ignoreError := false
 		line := scanner.Text()
 
 		// skip blank and comment lines
@@ -192,8 +206,18 @@ func (parser *AddOnParser) parseCommands(scanner *bufio.Scanner) ([]command.Comm
 		if len(line) == 0 || strings.HasPrefix(line, commentChar) {
 			continue
 		}
-
-		newCommand, err := parser.handler.Handle(parser.handler, line)
+		if strings.HasPrefix(line, ignoreErrorChar) {
+			ignoreError = true
+			line = strings.TrimPrefix(line, ignoreErrorChar)
+		}
+		if strings.Contains(line, evaluationChar) {
+			cmdToken, err := minishiftStrings.SplitAndTrim(line, evaluationChar)
+			if err != nil {
+				return nil, err
+			}
+			outputVariable, line = cmdToken[0], cmdToken[1]
+		}
+		newCommand, err := parser.handler.Handle(parser.handler, line, ignoreError, outputVariable)
 		if err != nil {
 			return nil, err
 		}

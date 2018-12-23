@@ -1,5 +1,5 @@
 /*
-Copyright (C) 2017 Red Hat, Inc.
+Copyright (C) 2018 Red Hat, Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,57 +17,10 @@ limitations under the License.
 package hostfolder
 
 import (
+	"github.com/stretchr/testify/assert"
 	"testing"
-
-	"github.com/docker/machine/libmachine/drivers"
-	"github.com/minishift/minishift/pkg/minikube/tests"
-
-	instanceState "github.com/minishift/minishift/pkg/minishift/config"
 )
 
-func setupMock() (*tests.SSHServer, *tests.MockDriver) {
-	mockSsh, _ := tests.NewSSHServer()
-	mockSsh.CommandToOutput = make(map[string]string)
-	port, _ := mockSsh.Start()
-
-	mockDriver := &tests.MockDriver{
-		Port: port,
-		BaseDriver: drivers.BaseDriver{
-			IPAddress:  "127.0.0.1",
-			SSHKeyPath: "",
-		},
-	}
-	return mockSsh, mockDriver
-}
-
-func setupHostFolder() *instanceState.HostFolder {
-	return &instanceState.HostFolder{
-		Name: "Users",
-		Type: "cifs",
-		Options: map[string]string{
-			"mountpoint": "",
-			"uncpath":    "//127.0.0.1/Users",
-			"username":   "joe@pillow.us",
-			"password":   "am!g@4ever",
-			"domain":     "DESKTOP-RHAIMSWIN",
-		},
-	}
-}
-
-func TestHostfolderIsMounted(t *testing.T) {
-	mockSsh, mockDriver := setupMock()
-	hostfolder := setupHostFolder()
-
-	state := false
-	mockSsh.CommandToOutput["if grep -qs /mnt/sda1/Users /proc/mounts; then echo '1'; else echo '0'; fi"] = `0`
-	state, _ = isHostfolderMounted(mockDriver, hostfolder)
-	if state {
-		t.Errorf("Hostfolder error: should have returned 0")
-	}
-
-	mockSsh.CommandToOutput["if grep -qs /mnt/sda1/Users /proc/mounts; then echo '1'; else echo '0'; fi"] = `1`
-	state, _ = isHostfolderMounted(mockDriver, hostfolder)
-	if !state {
-		t.Errorf("Hostfolder error: should have returned 1")
-	}
+func Test_type_string(t *testing.T) {
+	assert.Equal(t, CIFS.String(), "cifs", "unexpected string representation of host folder type")
 }

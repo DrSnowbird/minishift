@@ -33,7 +33,7 @@ import (
 
 const (
 	configTargetFlag         = "target"
-	unknownConfigTargetError = "Unknown configuration target. Only 'master' and 'node' are supported."
+	unknownConfigTargetError = "Unknown configuration target. Only 'master', 'node' and 'kube' are supported."
 )
 
 var (
@@ -48,13 +48,13 @@ var viewCmd = &cobra.Command{
 }
 
 func init() {
-	viewCmd.Flags().StringVar(&configTarget, configTargetFlag, "master", "Target configuration to display. Options are 'master' or 'node'.")
+	viewCmd.Flags().StringVar(&configTarget, configTargetFlag, "master", "Target configuration to display. Options are 'master', 'node' and 'kube'.")
 	configCmd.AddCommand(viewCmd)
 }
 
 func runViewConfig(cmd *cobra.Command, args []string) {
 	configFileTarget := determineTarget(configTarget)
-	if configFileTarget == openshift.UNKNOWN {
+	if configFileTarget == openshift.GetOpenShiftPatchTarget("unknown") {
 		atexit.ExitWithMessage(1, unknownConfigTargetError)
 	}
 

@@ -6,7 +6,7 @@ clone_folder: C:\gopath\src\github.com\minishift\minishift
 
 environment:
   GOPATH: C:\gopath
-  GOVERSION: 1.8.3
+  GOVERSION: 1.11.2
 
 platform:
 - x64
@@ -21,7 +21,7 @@ install:
 - go env
 # Install Godep and create a specific tmp path to avoid error with too long dir names
 - ps: mkdir "$env:GOPATH\bin"
-- ps: wget 'https://github.com/golang/dep/releases/download/v0.3.2/dep-windows-amd64' -OutFile "$env:GOPATH\bin\dep.exe"
+- ps: wget 'https://github.com/golang/dep/releases/download/v0.4.1/dep-windows-amd64.exe' -OutFile "$env:GOPATH\bin\dep.exe"
 - set PATH=%PATH%;%GOPATH%\bin
 - mkdir c:\tmp
 # Use Chocolatey to install make

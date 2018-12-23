@@ -19,36 +19,33 @@ package util
 import (
 	"os"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func Test_default_no_proxy_list(t *testing.T) {
 	proxyConfig, err := NewProxyConfig("http://foobar.com", "", "")
-	if err != nil {
-		t.Fatal("Unexpected error creating proxy config")
-	}
+	assert.NoError(t, err, "Error in getting new proxy config")
 
-	if proxyConfig.NoProxy() != "localhost,127.0.0.1,"+OpenShiftRegistryIp {
-		t.Fatalf("Unexpected default no proxy list: %s", proxyConfig.NoProxy())
-	}
+	assert.Equal(t, "localhost,127.0.0.1,"+OpenShiftRegistryIp, proxyConfig.NoProxy())
 }
 
 func Test_proxy_config_as_slice(t *testing.T) {
 	proxyConfig, err := NewProxyConfig("http://foobar.com", "https://snafu.de", "")
-	if err != nil {
-		t.Fatal("Unexpected error creating proxy config")
-	}
+	assert.NoError(t, err, "Error in getting new proxy config")
 
-	expectedConfig := []string{"HTTP_PROXY=http://foobar.com", "HTTPS_PROXY=https://snafu.de", "NO_PROXY=localhost,127.0.0.1,172.30.1.1"}
+	expectedConfig := []string{"HTTP_PROXY=http://foobar.com",
+		"http_proxy=http://foobar.com",
+		"HTTPS_PROXY=https://snafu.de",
+		"https_proxy=https://snafu.de",
+		"NO_PROXY=localhost,127.0.0.1,172.30.1.1",
+		"no_proxy=localhost,127.0.0.1,172.30.1.1"}
 	actualConfig := proxyConfig.ProxyConfig()
 
-	if len(actualConfig) != len(expectedConfig) {
-		t.Fatal("Expected and actual config length differ")
-	}
+	assert.Len(t, expectedConfig, len(actualConfig))
 
 	for i, actualValue := range actualConfig {
-		if actualValue != expectedConfig[i] {
-			t.Fatalf("Expected '%s', got '%s'", expectedConfig[i], actualValue)
-		}
+		assert.Equal(t, expectedConfig[i], actualValue)
 	}
 }
 
@@ -57,75 +54,36 @@ func Test_set_to_environment(t *testing.T) {
 	defer os.Clearenv()
 
 	proxyConfig, err := NewProxyConfig("http://foobar.com", "https://snafu.de", "42.42.42.42")
-	if err != nil {
-		t.Fatal("Unexpected error creating proxy config")
-	}
+	assert.NoError(t, err, "Error in getting new proxy config")
 
 	proxyConfig.ApplyToEnvironment()
 
 	expectedValue := "http://foobar.com"
-	if os.Getenv("HTTP_PROXY") != expectedValue {
-		t.Fatalf("Unexpected proxy setting. Expected '%s'. Got '%s'", expectedValue, os.Getenv("HTTP_PROXY"))
-	}
+	assert.Equal(t, expectedValue, os.Getenv("HTTP_PROXY"))
 
 	expectedValue = "https://snafu.de"
-	if os.Getenv("HTTPS_PROXY") != expectedValue {
-		t.Fatalf("Unexpected proxy setting. Expected '%s'. Got '%s'", expectedValue, os.Getenv("HTTPS_PROXY"))
-	}
+	assert.Equal(t, expectedValue, os.Getenv("HTTPS_PROXY"))
 
 	expectedValue = "localhost,127.0.0.1,172.30.1.1,42.42.42.42"
-	if os.Getenv("NO_PROXY") != expectedValue {
-		t.Fatalf("Unexpected proxy setting. Expected '%s'. Got '%s'", expectedValue, os.Getenv("NO_PROXY"))
-	}
-}
-
-func Test_invalid_http_proxy(t *testing.T) {
-	_, err := NewProxyConfig("foo", "", "")
-	if err == nil {
-		t.Fatal("Expected error, but got none")
-	}
-
-	expectedError := "Proxy URL 'foo' is not valid."
-	if err.Error() != expectedError {
-		t.Fatalf("Unexpected error message, expected '%s', but got '%s'", expectedError, err.Error())
-	}
-
-}
-
-func Test_invalid_https_proxy(t *testing.T) {
-	_, err := NewProxyConfig("", "bar", "")
-	if err == nil {
-		t.Fatal("Expected error, but got none")
-	}
-
-	expectedError := "Proxy URL 'bar' is not valid."
-	if err.Error() != expectedError {
-		t.Fatalf("Unexpected error message, expected '%s', but got '%s'", expectedError, err.Error())
-	}
-
+	assert.Equal(t, expectedValue, os.Getenv("NO_PROXY"))
 }
 
 func Test_add_no_proxy(t *testing.T) {
 	proxyConfig, err := NewProxyConfig("http://foobar.com", "https://snafu.de", "42.42.42.42")
-	if err != nil {
-		t.Fatal("Unexpected error creating proxy config")
-	}
+	assert.NoError(t, err, "Error in getting new proxy config")
 
 	expectedNoProxy := "localhost,127.0.0.1,172.30.1.1,42.42.42.42"
-	if expectedNoProxy != proxyConfig.NoProxy() {
-		t.Fatalf("Unexpected no proxy list, expected '%s', but got '%s'", expectedNoProxy, proxyConfig.NoProxy())
-	}
+	assert.Equal(t, expectedNoProxy, proxyConfig.NoProxy())
 
 	proxyConfig.AddNoProxy("snafu.com")
 	expectedNoProxy = "localhost,127.0.0.1,172.30.1.1,42.42.42.42,snafu.com"
-	if expectedNoProxy != proxyConfig.NoProxy() {
-		t.Fatalf("Unexpected no proxy list, expected '%s', but got '%s'", expectedNoProxy, proxyConfig.NoProxy())
-	}
+	assert.Equal(t, expectedNoProxy, proxyConfig.NoProxy())
 }
 
 func Test_validate_proxy_url(t *testing.T) {
 	urlList := map[string]bool{
-		"": true,
+		"":                                     true,
+		"foo.com:3128":                         true,
 		"http://foo.com:3128":                  true, // special case for us as part of ProxyConfig
 		"http://127.0.0.1:3128":                true,
 		"http://foo:bar@test.com:324":          true,
@@ -138,14 +96,12 @@ func Test_validate_proxy_url(t *testing.T) {
 		"http://foo:bar@test.com:abc":          false,
 	}
 	for proxyUrl, valid := range urlList {
-		err := ValidateProxyURL(proxyUrl)
-
-		if valid && err != nil {
-			t.Errorf("Proxy URL '%s' should be valid, but got error: %s", proxyUrl, err.Error())
+		err := ValidateProxyURL(proxyUrl, "http")
+		if valid {
+			assert.NoError(t, err)
 		}
-
-		if !valid && err == nil {
-			t.Errorf("Proxy URL '%s' should not be valid, but no error received", proxyUrl)
+		if !valid {
+			assert.Error(t, err)
 		}
 	}
 }
@@ -161,6 +117,8 @@ func Test_http_proxy_from_env(t *testing.T) {
 	}{
 		{"HTTP_PROXY", "http://user:pass@myproxy.foo:1080", true},
 		{"HTTPS_PROXY", "http://user:pass@myproxy.foo:1080", true},
+		{"http_proxy", "http://user:pass@myproxy.foo:1080", true},
+		{"https_proxy", "http://user:pass@myproxy.foo:1080", true},
 		{"HTTP_PROXY", "", false},
 		{"HTTPS_PROXY", "", false},
 	}
@@ -169,15 +127,44 @@ func Test_http_proxy_from_env(t *testing.T) {
 		os.Setenv(row.envVar, row.envValue)
 
 		proxyConfig, err := NewProxyConfig("", "", "")
-		if err != nil {
-			t.Errorf("Unexpected error creating proxy config: %v", err)
-			continue
-		}
+		assert.NoError(t, err)
 
-		if proxyConfig.IsEnabled() != row.enabled {
-			t.Errorf("Expected proxy config to be %t, but got %t", row.enabled, proxyConfig.IsEnabled())
-		}
+		assert.Equal(t, row.enabled, proxyConfig.IsEnabled())
 
 		os.Clearenv()
+	}
+}
+
+func Test_http_proxy_from_env_lowercase_precedence(t *testing.T) {
+	os.Clearenv()
+	defer os.Clearenv()
+
+	os.Setenv("HTTP_PROXY", "http://user:pass@myproxy.foo:1080")
+	os.Setenv("http_proxy", "http://user:pass@someotherproxy.foo:1080")
+	os.Setenv("HTTPS_PROXY", "https://user:pass@myproxy.foo:1080")
+	os.Setenv("https_proxy", "https://user:pass@someotherproxy.foo:1080")
+
+	proxyConfig, err := NewProxyConfig("", "", "")
+	assert.NoError(t, err)
+
+	assert.Equal(t, "http://user:pass@someotherproxy.foo:1080", proxyConfig.httpProxy)
+	assert.Equal(t, "https://user:pass@someotherproxy.foo:1080", proxyConfig.httpsProxy)
+}
+
+func Test_parse_special_character_uri(t *testing.T) {
+	var urlList = []struct {
+		givenURI    string
+		expectedURI string
+	}{
+		{"", ""},
+		{"foo.com:3128", "http://foo.com:3128"},
+		{"http://foo.com:3128", "http://foo.com:3128"},
+		{"http://user:F@oo!B#ar$@myserver:3128", "http://user:F@oo%21B%23ar$@myserver:3128"},
+		{"https://myuser:my#pass@foo.com:3128", "https://myuser:my%23pass@foo.com:3128"},
+		{"https://newuser:new(pas*)wrd@test.com:3128", "https://newuser:new%28pas%2A%29wrd@test.com:3128"},
+	}
+	for _, proxyUrl := range urlList {
+		got := parseProxySpecialChar(proxyUrl.givenURI, "http")
+		assert.Equal(t, proxyUrl.expectedURI, got)
 	}
 }

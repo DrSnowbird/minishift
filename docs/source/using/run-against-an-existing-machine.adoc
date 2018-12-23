@@ -1,0 +1,100 @@
+include::variables.adoc[]
+
+= Run Against An Existing Machine
+:icons:
+:toc: macro
+:toc-title:
+:toclevels: 1
+
+toc::[]
+
+[[run-against-an-existing-machine-overview]]
+== Overview
+
+{project} can be run against an existing remote machine using `vm-driver` as `generic`.
+
+[NOTE]
+====
+CentOS 7, Red Hat Enterprise Linux 7, and Fedora > 26 are the suggested Linux distributions for this feature.
+====
+
+[[configuring-existing-remote-machine]]
+== Configuring an Existing Remote Machine
+
+To use an existing machine with {project}, it needs to be configured as follows:
+
+Establish password-less SSH from the host to the existing remote machine:
+----
+Host$ ssh-copy-id <user>@<remote_IP_address> # Ensure that the user has sudo access without a password or use root
+Host$ ssh <user>@<remote_IP_address>         # Ensure that this login works without a password
+----
+
+[NOTE]
+====
+Skip the following steps if you are using CentOS 7, Red Hat Enterprise Linux 7 or Fedora (version > 26).
+====
+
+. Configure the existing remote machine:
++
+----
+Remote_Machine$ yum install -y docker net-tools firewalld
+Remote_Machine$ systemctl start docker
+Remote_Machine$ systemctl enable docker
+Remote_Machine$ systemctl start firewalld
+Remote_Machine$ systemctl enable firewalld
+----
+
+. Allow the `2376`, `8443`, and `80` TCP ports through the firewall on the remote machine to have communication from the host:
++
+----
+Remote_Machine$ firewall-cmd --permanent --add-port 2376/tcp --add-port 8443/tcp --add-port 80/tcp
+----
+
+. Determine the Docker bridge network container subnet:
++
+----
+Remote_Machine$ docker network inspect -f "{{range .IPAM.Config }}{{ .Subnet }}{{end}}" bridge
+----
++
+This command displays a subnet, such as `172.17.0.0/16`.
+
+. Using the Docker bridge network container subnet, create a *minishift* zone for the firewall with the subnet as its source:
++
+----
+Remote_Machine$ firewall-cmd --permanent --new-zone minishift
+Remote_Machine$ firewall-cmd --permanent --zone minishift --add-source <subnet>
+----
+
+. Allow the `53` and `8053` UDP ports through the firewall on the remote machine to allow containers to access the OpenShift master API and DNS endpoints:
++
+----
+Remote_Machine$ firewall-cmd --permanent --zone minishift --add-port 53/udp --add-port 8053/udp
+----
+
+. Reload the firewall on the remote machine:
++
+----
+Remote_Machine$ firewall-cmd --reload
+----
+
+[[running-against-existing-remote-machine]]
+== Running Against an Existing Remote Machine
+
+Use the following command on the host to run {project} against a remote machine:
+
+----
+$ minishift start --vm-driver generic --remote-ipaddress <remote_IP_address> --remote-ssh-user <username> --remote-ssh-key <private_ssh_key>
+$ minishift addon apply htpasswd-identity-provider --addon-env USER_PASSWORD=<NEW_PASSWORD>
+----
+
+[NOTE]
+====
+The value of the `--remote-ssh-key` flag must be the location of a private SSH key on the host machine.
+====
+
+[NOTE]
+====
+To change the default username and password, you must apply the `htpasswd-identity-provider` add-on with the desired username and password after running the `minishift start` command.
+By default, {project} uses the `Allow All` identity provider.
+The `Allow All` identity provider allows any non-empty username and password to log in.
+====

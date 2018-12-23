@@ -17,107 +17,44 @@ limitations under the License.
 package version
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"regexp"
-	"sort"
 	"strings"
 
 	"github.com/blang/semver"
-	"github.com/docker/machine/libmachine/host"
 	"github.com/docker/machine/libmachine/provision"
 	"github.com/minishift/minishift/pkg/minikube/constants"
 	minishiftConstants "github.com/minishift/minishift/pkg/minishift/constants"
 	"github.com/minishift/minishift/pkg/minishift/docker"
-	"github.com/minishift/minishift/pkg/util"
+	"github.com/minishift/minishift/pkg/util/github"
+	"github.com/minishift/minishift/pkg/version"
 )
 
-type ImageTags struct {
-	Name string `json:"name"`
-}
-
-type ImageInfo struct {
-	Size         int         `json:"size"`
-	Architecture string      `json:"architecture"`
-	Variant      interface{} `json:"variant"`
-	Features     interface{} `json:"features"`
-	Os           interface{} `json:"os"`
-	OsVersion    interface{} `json:"os_version"`
-	OsFeatures   interface{} `json:"os_features"`
-}
-
-func GetOpenshiftVersion(host *host.Host) (string, error) {
-	sshCommander := provision.GenericSSHCommander{Driver: host.Driver}
+func GetOpenshiftVersion(sshCommander provision.SSHCommander) (string, error) {
 	dockerCommander := docker.NewVmDockerCommander(sshCommander)
 	return dockerCommander.Exec(" ", minishiftConstants.OpenshiftContainerName, "openshift", "version")
 }
 
-func PrintDownStreamVersions(output io.Writer, minSupportedVersion string) error {
-	resp, err := getResponseBody("https://registry.access.redhat.com/v1/repositories/openshift3/ose/tags")
+// PrintUpstreamVersions prints the origin versions which satisfies the following conditions:
+// 	1. Major versions greater than or equal to the minimum supported and default version
+//	2. Pre-release versions greater than default version
+func PrintUpstreamVersions(output io.Writer, minSupportedVersion string, defaultVersion string) error {
+	tags, err := GetGithubReleases()
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	decoder := json.NewDecoder(resp.Body)
-	var data map[string]string
-	err = decoder.Decode(&data)
-	if err != nil {
-		return errors.New(fmt.Sprintf("%T\n%s\n%#v\n", err, err, err))
-	}
-	fmt.Fprint(output, "The following OpenShift versions are available: \n")
-	var tagsList []string
-	for version := range data {
-		if util.VersionOrdinal(version) >= util.VersionOrdinal(minSupportedVersion) {
-			if strings.Contains(version, "latest") {
-				continue
-			}
-			if strings.Contains(version, "-") {
-				continue
-			}
-			tagsList = append(tagsList, version)
-		}
-	}
-	sort.Strings(tagsList)
-	for _, tag := range tagsList {
-		fmt.Fprintf(output, "\t- %s\n", tag)
-	}
-	return nil
-}
 
-func PrintUpStreamVersions(output io.Writer, minSupportedVersion string, defaultVersion string) error {
-	dockerRegistryUrl := "https://registry.hub.docker.com/v1/repositories/openshift/origin/tags"
-	resp, err := getResponseBody(dockerRegistryUrl)
+	releaseList, err := OpenShiftTagsByAscending(tags, minSupportedVersion, defaultVersion)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	decoder := json.NewDecoder(resp.Body)
-	var data []ImageTags
-	err = decoder.Decode(&data)
-	if err != nil {
-		return errors.New(fmt.Sprintf("%T\n%s\n%#v\n", err, err, err))
-	}
+
 	fmt.Fprint(output, "The following OpenShift versions are available: \n")
-	var tagsList []string
-	for _, imageTag := range data {
-		if strings.Contains(imageTag.Name, "latest") {
-			continue
-		}
-		if valid, _ := IsGreaterOrEqualToBaseVersion(imageTag.Name, minSupportedVersion); valid {
-			if valid, _ := IsGreaterOrEqualToBaseVersion(imageTag.Name, defaultVersion); valid {
-				tagsList = append(tagsList, imageTag.Name)
-			} else {
-				if !isPrerelease(imageTag.Name) {
-					tagsList = append(tagsList, imageTag.Name)
-				}
-			}
-		}
-	}
-	sort.Strings(tagsList)
-	for _, tag := range tagsList {
+	for _, tag := range releaseList {
 		fmt.Fprintf(output, "\t- %s\n", tag)
 	}
 	return nil
@@ -156,4 +93,61 @@ func IsGreaterOrEqualToBaseVersion(version string, baseVersion string) (bool, er
 		return true, nil
 	}
 	return false, nil
+}
+
+func GetGithubReleases() ([]string, error) {
+	var releaseTags []string
+	ctx := context.Background()
+	client := github.Client()
+	listOptions := github.ListOptions()
+	releases, _, err := client.Repositories.ListReleases(ctx, "openshift", "origin", listOptions)
+	if err != nil {
+		if github.IsRateLimitError(err) {
+			return nil, fmt.Errorf("Hit github rate limit: %v", err)
+		}
+		return nil, err
+	}
+	for _, release := range releases {
+		releaseTags = append(releaseTags, *release.Name)
+	}
+	return releaseTags, nil
+}
+
+func OpenShiftTagsByAscending(tags []string, minSupportedVersion, defaultVersion string) ([]string, error) {
+	var tagList []string
+
+	for _, tag := range tags {
+		if valid, _ := IsGreaterOrEqualToBaseVersion(tag, minSupportedVersion); valid {
+			if valid, _ := IsGreaterOrEqualToBaseVersion(tag, defaultVersion); valid {
+				tagList = append(tagList, tag)
+			} else {
+				if !isPrerelease(tag) {
+					tagList = append(tagList, tag)
+				}
+			}
+		}
+	}
+
+	return sortTagsViaSemverSort(tagList), nil
+}
+
+func sortTagsViaSemverSort(tags []string) []string {
+	var (
+		versionTags   []semver.Version
+		tagsInStrings []string
+	)
+
+	for _, tag := range tags {
+		semVerTag, _ := semver.Parse(strings.TrimPrefix(tag, version.VersionPrefix))
+		versionTags = append(versionTags, semVerTag)
+	}
+
+	semver.Sort(versionTags)
+
+	// again apply prefix to tag
+	for _, tag := range versionTags {
+		tagsInStrings = append(tagsInStrings, fmt.Sprintf("v%s", tag))
+	}
+
+	return tagsInStrings
 }

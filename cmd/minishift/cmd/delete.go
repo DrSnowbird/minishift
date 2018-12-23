@@ -21,6 +21,8 @@ import (
 	"os"
 
 	"github.com/docker/machine/libmachine"
+	"github.com/docker/machine/libmachine/host"
+	"github.com/docker/machine/libmachine/provision"
 	registrationUtil "github.com/minishift/minishift/cmd/minishift/cmd/registration"
 	"github.com/minishift/minishift/cmd/minishift/cmd/util"
 	"github.com/minishift/minishift/cmd/minishift/state"
@@ -60,10 +62,24 @@ func runDelete(cmd *cobra.Command, args []string) {
 
 	util.ExitIfUndefined(api, constants.MachineName)
 
+	host, err := api.Load(constants.MachineName)
+	if err != nil {
+		atexit.ExitWithMessage(1, err.Error())
+	}
+
 	if !forceFlag {
 		hasConfirmed := pkgUtil.AskForConfirmation(fmt.Sprintf("You are deleting the Minishift VM: '%s'.", constants.MachineName))
 		if !hasConfirmed {
 			atexit.Exit(0)
+		}
+	}
+
+	if host.Driver.DriverName() == "generic" {
+		if err := util.OcClusterDown(host); err != nil {
+			atexit.ExitWithMessage(1, err.Error())
+		}
+		if err := deleteExistingDirectory(host); err != nil {
+			atexit.ExitWithMessage(1, err.Error())
 		}
 	}
 
@@ -91,7 +107,7 @@ func clearCache() {
 	if err != nil {
 		atexit.ExitWithMessage(1, fmt.Sprintf("Error deleting Minishift cache: %v", err))
 	} else {
-		fmt.Printf("Removed cache content at: %s\n", cachePath)
+		fmt.Printf("Removed cache content at: '%s'\n", cachePath)
 	}
 }
 
@@ -107,10 +123,10 @@ func handleFailedHostDeletion(err error) {
 }
 
 func removeInstanceAndKubeConfig() {
-	exists := filehelper.Exists(minishiftConfig.InstanceConfig.FilePath)
+	exists := filehelper.Exists(minishiftConfig.InstanceStateConfig.FilePath)
 	if exists {
-		if err := minishiftConfig.InstanceConfig.Delete(); err != nil {
-			atexit.ExitWithMessage(1, fmt.Sprintln(fmt.Sprintf("Error deleting %s: ", minishiftConfig.InstanceConfig.FilePath), err))
+		if err := minishiftConfig.InstanceStateConfig.Delete(); err != nil {
+			atexit.ExitWithMessage(1, fmt.Sprintln(fmt.Sprintf("Error deleting '%s': ", minishiftConfig.InstanceStateConfig.FilePath), err))
 		}
 	}
 	exists = filehelper.Exists(constants.KubeConfigPath)
@@ -119,6 +135,16 @@ func removeInstanceAndKubeConfig() {
 			atexit.ExitWithMessage(1, fmt.Sprintf("Error deleting '%s'", constants.KubeConfigPath))
 		}
 	}
+}
+
+// deleteExistingDirectory delete the directory which minishift create in case of generic driver.
+// As of now even after cluster down there are some mount point left which cause issue to delete entire
+// directory tree so as of now ignoring the error [PK]
+func deleteExistingDirectory(hostVm *host.Host) error {
+	sshCommander := provision.GenericSSHCommander{Driver: hostVm.Driver}
+	cmd := fmt.Sprintf("sudo rm -fr /var/lib/minishift/*")
+	sshCommander.SSHCommand(cmd)
+	return nil
 }
 
 func init() {
